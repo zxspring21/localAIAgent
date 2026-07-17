@@ -1,0 +1,59 @@
+.message-row {
+  display: flex;
+  gap: 16px;
+  padding: 24px 0;
+  max-width: 768px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.message-row.user {
+  background: var(--user-bg);
+  margin: 0 -24px;
+  padding: 24px;
+  max-width: calc(768px + 48px);
+}
+
+.message-avatar {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+}
+
+.message-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.message-role {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: var(--text-secondary);
+}
+
+.tool-calls {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.tool-label {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.tool-badge {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--accent);
+}
