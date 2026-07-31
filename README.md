@@ -1,6 +1,6 @@
 # LocalAI Agent
 
-Multi-Agent automation system integrating vLLM inference, Chain-of-Thought reasoning, skill execution, memory management, multi-user authentication, and a Claude-like web interface.
+Multi-Agent automation system integrating vLLM inference, Chain-of-Thought reasoning, skill execution, memory management, multi-user authentication, SSE streaming, Celery async tasks, and a Claude-like web interface.
 
 ## Architecture
 
@@ -11,122 +11,117 @@ Multi-Agent automation system integrating vLLM inference, Chain-of-Thought reaso
 └─────────────┘     │  (port 8080) │     └─────────────┘
                     └──────┬───────┘
                            │
-              ┌────────────┼────────────┐
-              ▼            ▼            ▼
-         ┌────────┐  ┌────────┐  ┌─────────┐
-         │ Redis  │  │Postgres│  │ Qdrant  │
-         │ (ST)   │  │ (SQL)  │  │ (LT)    │
-         └────────┘  └────────┘  └─────────┘
+         ┌─────────────────┼─────────────────┐
+         ▼                 ▼                 ▼
+    ┌────────┐       ┌──────────┐      ┌─────────┐
+    │ Redis  │       │ Postgres │      │ Qdrant  │
+    │ (ST)   │       │ (SQL)    │      │ (LT)    │
+    └────────┘       └──────────┘      └─────────┘
+                           │
+                    ┌──────┴──────┐
+                    │ Celery Worker│
+                    │ (async jobs) │
+                    └─────────────┘
 ```
-
-### Modules
-
-| Module | Path | Description |
-|--------|------|-------------|
-| vLLM Backend | `scripts/start_vllm.sh` | OpenAI-compatible LLM inference server |
-| Skills | `backend/app/skills/` | Decorator-based skill registry with built-in tools |
-| Memory | `backend/app/memory/` | Redis (short-term) + PostgreSQL/Qdrant (long-term) |
-| Brain | `backend/app/brain/` | CoT loop with tool calling and memory integration |
-| Auth | `backend/app/auth/` | JWT-based multi-user authentication |
-| Automation | `backend/app/automation/` | APScheduler for recurring skill execution |
-| API | `backend/app/api/` | REST endpoints for chat, sessions, models |
-| Frontend | `frontend/` | Claude-inspired React chat interface |
 
 ## Quick Start
 
-### Prerequisites
-
-- Docker & Docker Compose
-- Python 3.11+ (for local development)
-- Node.js 20+ (for frontend development)
-- vLLM with GPU (for LLM inference)
-
-### 1. Infrastructure Services
-
 ```bash
 cp .env.example .env
-docker compose up -d postgres redis qdrant
+./scripts/start_dev.sh          # infra + backend + celery + frontend
+./scripts/start_vllm.sh ...     # separate terminal, requires GPU
 ```
 
-### 2. Start vLLM (requires GPU)
+Open **http://localhost:3000** for the chat UI.
+
+## Three Response Modes
+
+| Mode | Endpoint | Description |
+|------|----------|-------------|
+| **SSE Stream** | `POST /api/v1/chat/stream` | Real-time token streaming + tool events |
+| **Sync** | `POST /api/v1/chat` | Wait for full CoT response |
+| **Celery Async** | `POST /api/v1/chat/async` | Background processing, poll for result |
+
+Select mode in the chat UI top bar, or use the System Tests page to verify SSE and Celery.
+
+## Web Search API
+
+Configure in `.env`:
 
 ```bash
-chmod +x scripts/start_vllm.sh
-./scripts/start_vllm.sh meta-llama/Meta-Llama-3-8B-Instruct 8000 1
+# Provider: tavily | serpapi | duckduckgo
+WEB_SEARCH_PROVIDER=duckduckgo
+TAVILY_API_KEY=tvly-...        # https://tavily.com
+SERPAPI_API_KEY=...              # https://serpapi.com
 ```
 
-For larger models with multi-GPU:
+Fallback chain: configured provider → Tavily (if key set) → SerpAPI (if key set) → DuckDuckGo (free, no key).
+
+The `web_search` skill is callable by the CoT loop or asynchronously via Celery:
 
 ```bash
-./scripts/start_vllm.sh meta-llama/Meta-Llama-3-70B-Instruct 8000 4
+POST /api/v1/skills/execute-async
+{"skill_name": "web_search", "args": {"query": "latest AI news"}}
 ```
 
-### 3. Backend
+## Celery Async Tasks
 
 ```bash
-cd backend
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
+# Start worker (included in start_dev.sh and docker-compose)
+cd backend && celery -A app.celery_app worker --loglevel=info
 ```
 
-### 4. Frontend
+| Task | Celery name | Purpose |
+|------|-------------|---------|
+| Chat processing | `tasks.process_chat` | Full CoT loop in background |
+| Skill execution | `tasks.execute_skill` | Run any registered skill async |
+| Scheduled skill | `tasks.run_scheduled_skill` | Automation via Celery |
 
-```bash
-cd frontend
-npm install
-npm run dev
-```
+## SSE Event Types
 
-Open http://localhost:3000
+The `/chat/stream` endpoint emits Server-Sent Events:
 
-### Full Docker Stack
-
-```bash
-docker compose up -d
-```
-
-Note: vLLM must be started separately on the host with GPU access.
+| Event | Data | When |
+|-------|------|------|
+| `start` | `{session_id, model}` | Stream begins |
+| `token` | `{content}` | Each LLM token |
+| `thinking` | `{iteration}` | CoT loop iteration |
+| `tool_start` | `{name, args}` | Skill execution begins |
+| `tool_result` | `{name, result}` | Skill execution completes |
+| `done` | `{content, tool_calls_made}` | Final response |
+| `error` | `{message}` | Failure |
 
 ## API Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v1/auth/register` | Register new user |
-| POST | `/api/v1/auth/login` | Login, get JWT token |
-| GET | `/api/v1/auth/me` | Current user info |
-| GET | `/api/v1/models` | List available LLM models |
-| GET | `/api/v1/skills` | List registered skills |
-| POST | `/api/v1/sessions` | Create chat session |
-| GET | `/api/v1/sessions` | List user sessions |
-| GET | `/api/v1/sessions/{id}/messages` | Get session messages |
-| POST | `/api/v1/chat` | Send message (CoT + tools) |
-| POST | `/api/v1/automation/schedule-skill` | Schedule recurring skill |
-| DELETE | `/api/v1/automation/tasks/{id}` | Cancel scheduled task |
+| POST | `/api/v1/chat` | Sync chat (CoT + tools) |
+| POST | `/api/v1/chat/stream` | SSE streaming chat |
+| POST | `/api/v1/chat/async` | Celery background chat |
+| GET | `/api/v1/chat/async/{task_id}` | Poll async chat result |
+| POST | `/api/v1/skills/execute-async` | Celery background skill |
+| GET | `/api/v1/skills/execute-async/{task_id}` | Poll skill result |
+| GET | `/api/v1/tests/overview` | Run all module tests |
+
+See full endpoint list in previous sections and `backend/app/api/routes.py`.
+
+## System Test Dashboard
+
+Navigate to **System Tests** in the UI (`/test`) to independently verify:
+
+- vLLM, PostgreSQL, Redis, Qdrant connectivity
+- Skill registry and web search
+- Celery worker availability
+- SSE streaming and async chat integration
+- Multi-session isolation, auth, memory
 
 ## Built-in Skills
 
-- `run_github_code` — Clone and run scripts from GitHub repos
+- `web_search` — Tavily / SerpAPI / DuckDuckGo
+- `run_github_code` — Clone and run GitHub skill repos
 - `execute_system_command` — Safe read-only shell commands
 - `read_file` / `write_file` — Workspace file operations
 - `list_directory` — Directory listing
-- `web_search` — Web search (placeholder for real API integration)
-
-## Adding Custom Skills
-
-```python
-from app.skills.registry import skill
-
-@skill(name="my_skill", description="Does something useful")
-def my_skill(param: str) -> str:
-    return f"Result: {param}"
-```
-
-Import the module in `backend/app/skills/__init__.py` to register it.
-
-## Environment Variables
-
-See `.env.example` for all configuration options including vLLM URL, database connections, JWT secrets, and memory limits.
 
 ## License
 

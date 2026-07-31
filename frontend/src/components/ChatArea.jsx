@@ -54,8 +54,8 @@ export default function ChatArea({ messages, onSend, loading, hasSession }) {
               <button onClick={() => onSend('List the files in the current directory')}>
                 List directory files
               </button>
-              <button onClick={() => onSend('Help me understand how multi-agent CoT works')}>
-                Explain CoT reasoning
+              <button onClick={() => onSend('Search the web for latest AI agent frameworks')}>
+                Web search demo
               </button>
             </div>
           </div>
@@ -67,10 +67,12 @@ export default function ChatArea({ messages, onSend, loading, hasSession }) {
             role={msg.role}
             content={msg.content}
             toolCalls={msg.tool_calls_made}
+            activeTools={msg.activeTools}
+            streaming={msg.streaming}
           />
         ))}
 
-        {loading && <TypingIndicator />}
+        {loading && messages.every((m) => !m.streaming) && <TypingIndicator />}
         <div ref={messagesEndRef} />
       </div>
 

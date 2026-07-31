@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.api.routes import router
+from app.api.test_routes import router as test_router
 from app.automation.scheduler import start_scheduler, stop_scheduler
 from app.config import settings
 from app.memory import lt_memory, st_memory
@@ -52,6 +53,7 @@ app.add_middleware(
 )
 
 app.include_router(router, prefix="/api/v1")
+app.include_router(test_router, prefix="/api/v1")
 
 
 @app.get("/health")

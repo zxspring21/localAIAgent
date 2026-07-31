@@ -11,6 +11,8 @@ log()  { echo -e "${GREEN}[localai]${NC} $*"; }
 warn() { echo -e "${YELLOW}[localai]${NC} $*"; }
 err()  { echo -e "${RED}[localai]${NC} $*" >&2; }
 
+chmod +x scripts/start_vllm.sh scripts/start_dev.sh
+
 # ── 1. Environment ──────────────────────────────────────────────
 if [[ ! -f .env ]]; then
   log "Creating .env from .env.example"

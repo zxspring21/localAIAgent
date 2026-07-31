@@ -49,11 +49,14 @@
   color: var(--text-muted);
 }
 
-.tool-badge {
-  font-size: 0.75rem;
-  padding: 2px 8px;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  color: var(--accent);
+.tool-badge.running {
+  animation: pulse 1.4s infinite;
+  border-color: var(--accent);
+}
+.tool-calls.active {
+  opacity: 0.85;
+}
+.streaming-placeholder {
+  color: var(--text-muted);
+  font-style: italic;
 }

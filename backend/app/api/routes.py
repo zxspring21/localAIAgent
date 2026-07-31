@@ -25,14 +25,17 @@ from app.models.schemas import (
     ScheduleSkillResponse,
     SessionCreate,
     SessionResponse,
+    SkillExecuteRequest,
+    SkillExecuteResponse,
     SkillInfo,
+    SkillTaskStatus,
     TokenResponse,
     UserLogin,
     UserRegister,
     UserResponse,
 )
 from app.skills.registry import list_skills
-from app.tasks.chat import process_chat_task
+from app.tasks.chat import execute_skill_task, process_chat_task
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -240,6 +243,10 @@ async def chat_async_status(
     task_id: str,
     current_user: User = Depends(get_current_user),
 ):
+    return _get_celery_task_status(task_id)
+
+
+def _get_celery_task_status(task_id: str) -> AsyncTaskStatus:
     from celery.result import AsyncResult
 
     result = AsyncResult(task_id, app=process_chat_task.app)
@@ -254,6 +261,36 @@ async def chat_async_status(
             else:
                 response.status = "SUCCESS"
                 response.result = data
+        else:
+            response.status = "FAILURE"
+            response.error = str(result.result)
+
+    return response
+
+
+@router.post("/skills/execute-async", response_model=SkillExecuteResponse)
+async def execute_skill_async(
+    body: SkillExecuteRequest,
+    current_user: User = Depends(get_current_user),
+):
+    task = execute_skill_task.delay(body.skill_name, body.args)
+    return SkillExecuteResponse(task_id=task.id, status="pending")
+
+
+@router.get("/skills/execute-async/{task_id}", response_model=SkillTaskStatus)
+async def execute_skill_async_status(
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    from celery.result import AsyncResult
+
+    result = AsyncResult(task_id, app=execute_skill_task.app)
+    response = SkillTaskStatus(task_id=task_id, status=result.status)
+
+    if result.ready():
+        if result.successful():
+            response.status = "SUCCESS"
+            response.result = result.result
         else:
             response.status = "FAILURE"
             response.error = str(result.result)

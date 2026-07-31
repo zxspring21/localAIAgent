@@ -83,9 +83,21 @@ class ScheduleSkillResponse(BaseModel):
     message: str
 
 
-class SkillInfo(BaseModel):
-    name: str
-    description: str
+class SkillExecuteRequest(BaseModel):
+    skill_name: str
+    args: dict = Field(default_factory=dict)
+
+
+class SkillExecuteResponse(BaseModel):
+    task_id: str
+    status: str
+
+
+class SkillTaskStatus(BaseModel):
+    task_id: str
+    status: str
+    result: dict | None = None
+    error: str | None = None
 
 
 class AsyncChatResponse(BaseModel):
@@ -98,3 +110,20 @@ class AsyncTaskStatus(BaseModel):
     status: str
     result: dict | None = None
     error: str | None = None
+
+
+class TestResult(BaseModel):
+    name: str
+    module: str
+    status: str
+    message: str
+    details: dict = Field(default_factory=dict)
+    tested_at: str
+
+
+class TestSuiteResponse(BaseModel):
+    total: int
+    passed: int
+    failed: int
+    results: list[TestResult]
+    ports: dict = Field(default_factory=dict)

@@ -34,7 +34,8 @@ class Settings(BaseSettings):
     celery_result_backend: str = "redis://localhost:6379/2"
 
     tavily_api_key: str = ""
-    web_search_provider: str = "tavily"
+    serpapi_api_key: str = ""
+    web_search_provider: str = "duckduckgo"
 
     max_cot_iterations: int = 10
     frontend_url: str = "http://localhost:3000"
