@@ -6,11 +6,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from app.agents.swarm import run_swarm
 from app.api.routes import router
 from app.api.test_routes import router as test_router
 from app.automation.scheduler import start_scheduler, stop_scheduler
 from app.config import settings
+from app.db.init import check_database_connection, init_database
 from app.memory import lt_memory, st_memory
+from app.mcp.loader import register_mcp_skills
 from app.skills import builtin  # noqa: F401 - register built-in skills
 
 logging.basicConfig(level=logging.DEBUG if settings.app_debug else logging.INFO)
@@ -22,6 +25,13 @@ FRONTEND_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "di
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting LocalAI Agent backend...")
+    if await check_database_connection():
+        try:
+            await init_database()
+        except Exception as e:
+            logger.error("Database init failed: %s", e)
+    else:
+        logger.warning("PostgreSQL unavailable — auth and sessions will not work.")
     try:
         await st_memory.connect()
     except Exception as e:
@@ -30,6 +40,12 @@ async def lifespan(app: FastAPI):
         lt_memory.connect()
     except Exception as e:
         logger.warning("Qdrant unavailable (LT vector search disabled): %s", e)
+    try:
+        n = await register_mcp_skills()
+        if n:
+            logger.info("Registered %d MCP tools", n)
+    except Exception as e:
+        logger.warning("MCP skill registration skipped: %s", e)
     start_scheduler()
     yield
     stop_scheduler()

@@ -1,0 +1,9 @@
+# vLLM inference stack (separate from backend/.venv)
+# Install: pip install -r requirements-vllm.txt
+#
+# vLLM 0.11 requires transformers 4.x — transformers 5.x breaks tokenizer init.
+
+vllm==0.11.0
+transformers>=4.55.2,<5.0.0
+tokenizers>=0.21.0,<0.23.0
+huggingface-hub>=0.34.0

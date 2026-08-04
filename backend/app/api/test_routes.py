@@ -75,8 +75,9 @@ async def test_overview(
         ports={
             "frontend_ui": settings.frontend_url,
             "backend_api": f"http://localhost:{settings.app_port}",
-            "vllm_inference": settings.vllm_base_url.replace("/v1", ""),
-            "note": "Port 8000 is vLLM inference only — open Frontend UI at port 3000",
+            "vllm_inference": settings.llm_base_url.replace("/v1", ""),
+            "llm_backend": settings.llm_backend,
+            "note": f"LLM backend: {settings.llm_backend} at port 8000 — Frontend UI at port 3000",
         },
     )
 
@@ -163,42 +164,32 @@ async def test_cot_loop(current_user: User = Depends(get_current_user)):
         details={
             "registered_skills": len(SKILL_REGISTRY),
             "skill_names": list(SKILL_REGISTRY.keys()),
-            "vllm_base_url": settings.vllm_base_url,
+            "vllm_base_url": settings.llm_base_url,
             "max_cot_iterations": settings.max_cot_iterations,
             "models_available": len(models),
-            "default_model": settings.vllm_default_model,
+            "default_model": settings.llm_default_model,
         },
     )
 
 
 async def _test_vllm() -> TestResult:
-    try:
-        models = await brain.list_models()
-        base = settings.vllm_base_url.replace("/v1", "")
-        async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.get(f"{base}/health")
-            health_ok = resp.status_code == 200
-        ok = len(models) > 0
-        return _result(
-            name="vLLM Connection",
-            module="vLLM Backend",
-            ok=ok,
-            message=f"Connected — {len(models)} model(s) available" if ok else "vLLM unreachable (start with ./scripts/start_vllm.sh)",
-            details={
-                "base_url": settings.vllm_base_url,
-                "health_endpoint": f"{base}/health",
-                "health_ok": health_ok,
-                "models": [m["id"] for m in models],
-            },
-        )
-    except Exception as e:
-        return _result(
-            name="vLLM Connection",
-            module="vLLM Backend",
-            ok=False,
-            message=f"vLLM not running: {e}. Port 8000 is inference only — not the UI.",
-            details={"base_url": settings.vllm_base_url, "hint": "./scripts/start_vllm.sh"},
-        )
+    ok, msg = await brain.check_llm_health()
+    models = await brain.list_models()
+    has_models = len(models) > 0
+    hint = "./scripts/start_llm_mlx.sh" if settings.llm_backend == "mlx" else "./scripts/start_vllm.sh"
+    return _result(
+        name=f"LLM Connection ({settings.llm_backend})",
+        module="LLM Backend",
+        ok=ok and has_models,
+        message=msg if ok else f"{msg} — run: {hint}",
+        details={
+            "backend": settings.llm_backend,
+            "base_url": settings.llm_base_url,
+            "default_model": settings.llm_default_model,
+            "models": [m["id"] for m in models],
+            "tools_enabled": settings.use_tool_calling,
+        },
+    )
 
 
 async def _test_postgres(db: AsyncSession) -> TestResult:
@@ -328,8 +319,8 @@ async def _test_auth(user: User) -> TestResult:
 
 async def _test_multi_session(db: AsyncSession, user: User) -> TestResult:
     try:
-        s1 = Session(user_id=user.id, title="Test Session A", model_name=settings.vllm_default_model)
-        s2 = Session(user_id=user.id, title="Test Session B", model_name=settings.vllm_default_model)
+        s1 = Session(user_id=user.id, title="Test Session A", model_name=settings.llm_default_model)
+        s2 = Session(user_id=user.id, title="Test Session B", model_name=settings.llm_default_model)
         db.add_all([s1, s2])
         await db.flush()
 
@@ -384,7 +375,7 @@ async def _test_st_memory() -> TestResult:
 
 
 async def _test_lt_memory(db: AsyncSession, user: User) -> TestResult:
-    test_session = Session(user_id=user.id, title="LT Test", model_name=settings.vllm_default_model)
+    test_session = Session(user_id=user.id, title="LT Test", model_name=settings.llm_default_model)
     db.add(test_session)
     await db.flush()
     try:

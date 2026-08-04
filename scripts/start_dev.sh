@@ -9,21 +9,23 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 
 log()  { echo -e "${GREEN}[localai]${NC} $*"; }
 warn() { echo -e "${YELLOW}[localai]${NC} $*"; }
-err()  { echo -e "${RED}[localai]${NC} $*" >&2; }
 
-chmod +x scripts/start_vllm.sh scripts/start_dev.sh
+chmod +x scripts/start_vllm.sh scripts/start_llm_mlx.sh scripts/start_dev.sh
 
 # ── 1. Environment ──────────────────────────────────────────────
 if [[ ! -f .env ]]; then
   log "Creating .env from .env.example"
   cp .env.example .env
 fi
+# shellcheck disable=SC1091
+source .env
+
+LLM_BACKEND="${LLM_BACKEND:-mlx}"
 
 # ── 2. Infrastructure (Docker) ───────────────────────────────────
 log "Starting infrastructure (postgres, redis, qdrant)..."
 docker compose up -d postgres redis qdrant 2>/dev/null || {
   warn "Docker compose failed — make sure Docker is running."
-  warn "You can also install postgres/redis/qdrant locally."
 }
 
 log "Waiting for services to be healthy..."
@@ -32,6 +34,7 @@ for i in $(seq 1 30); do
   redis_ok=$(docker compose exec -T redis redis-cli ping 2>/dev/null | grep -c PONG || true)
   if [[ "$pg_ok" == "yes" && "$redis_ok" -ge 1 ]]; then
     log "Infrastructure ready."
+    docker compose exec -T postgres psql -U localai -d localai < scripts/init_db.sql >/dev/null 2>&1 || true
     break
   fi
   sleep 1
@@ -63,6 +66,30 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# LLM server (Apple Silicon → mlx-lm)
+if [[ "$LLM_BACKEND" == "mlx" ]]; then
+  if curl -sf --max-time 2 http://127.0.0.1:8000/v1/models >/dev/null 2>&1; then
+    log "MLX-LM already running on http://localhost:8000"
+  else
+    log "Starting MLX-LM server (Apple Silicon) on http://localhost:8000 ..."
+    RUN_IN_BACKGROUND=1 ./scripts/start_llm_mlx.sh &
+    PIDS+=($!)
+    log "Waiting for MLX model to load (may take 1-2 min on first run)..."
+    for i in $(seq 1 90); do
+      if curl -sf --max-time 2 http://127.0.0.1:8000/v1/models >/dev/null 2>&1; then
+        log "MLX-LM ready."
+        break
+      fi
+      sleep 2
+      if [[ $i -eq 90 ]]; then
+        warn "MLX-LM still loading — chat may work once model finishes loading."
+      fi
+    done
+  fi
+elif [[ "$LLM_BACKEND" == "vllm" ]]; then
+  warn "LLM_BACKEND=vllm — start ./scripts/start_vllm.sh manually (requires NVIDIA GPU)."
+fi
+
 log "Starting Celery worker..."
 (cd backend && celery -A app.celery_app worker --loglevel=info) &
 PIDS+=($!)
@@ -81,10 +108,11 @@ echo -e "  ${GREEN}LocalAI Agent is starting!${NC}"
 echo -e ""
 echo -e "  Frontend UI:  ${GREEN}http://localhost:3000${NC}  ← open this"
 echo -e "  Backend API:  http://localhost:8080"
-echo -e "  API Health:   http://localhost:8080/health"
-echo -e "  vLLM (LLM):   http://localhost:8000  (start separately with GPU)"
+echo -e "  LLM (${LLM_BACKEND}):  http://localhost:8000/v1"
 echo -e ""
-echo -e "  ${YELLOW}Note: port 8000 is vLLM inference only — no web UI.${NC}"
+if [[ "$LLM_BACKEND" == "mlx" ]]; then
+  echo -e "  ${YELLOW}MLX model loading — first request may take 1-2 min.${NC}"
+fi
 echo -e "${GREEN}══════════════════════════════════════════════════════${NC}"
 echo ""
 

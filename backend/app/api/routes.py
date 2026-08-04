@@ -3,11 +3,12 @@ import logging
 import uuid
 from collections.abc import AsyncGenerator
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.swarm import run_swarm
 from app.auth.jwt import authenticate_user, create_access_token, get_current_user, register_user
 from app.automation.scheduler import create_scheduled_task, remove_scheduled_job
 from app.brain.controller import brain
@@ -85,7 +86,7 @@ async def create_session(
     session = Session(
         user_id=current_user.id,
         title=body.title,
-        model_name=body.model_name or settings.vllm_default_model,
+        model_name=body.model_name or settings.llm_default_model,
     )
     db.add(session)
     await db.commit()
@@ -159,13 +160,29 @@ async def chat(
     model_name = request.model_name or session.model_name
 
     try:
-        process_result = await brain.process_request(
-            db=db,
-            user_id=current_user.id,
-            session_id=request.session_id,
-            model_name=model_name,
-            user_input=request.message,
-        )
+        if request.use_swarm:
+            swarm_result = await run_swarm(
+                db=db,
+                user_id=current_user.id,
+                session_id=request.session_id,
+                model_id=model_name,
+                user_input=request.message,
+            )
+            process_result = type("R", (), {
+                "content": swarm_result.content,
+                "model_name": swarm_result.model_name,
+                "tool_calls_made": swarm_result.tool_calls_made,
+                "agents_used": swarm_result.agents_used,
+            })()
+        else:
+            process_result = await brain.process_request(
+                db=db,
+                user_id=current_user.id,
+                session_id=request.session_id,
+                model_name=model_name,
+                user_input=request.message,
+                attachments=request.attachments or None,
+            )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Processing error: {e}")
 
@@ -178,7 +195,42 @@ async def chat(
         session_id=request.session_id,
         model_name=process_result.model_name,
         tool_calls_made=process_result.tool_calls_made,
+        agents_used=getattr(process_result, "agents_used", []),
     )
+
+
+@router.post("/uploads")
+async def upload_files(
+    files: list[UploadFile] = File(...),
+    current_user: User = Depends(get_current_user),
+):
+    from pathlib import Path
+
+    upload_dir = Path("uploads") / str(current_user.id)
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    saved: list[str] = []
+    for f in files:
+        dest = upload_dir / f.filename
+        content = await f.read()
+        if len(content) > 5_000_000:
+            raise HTTPException(status_code=400, detail=f"File too large: {f.filename}")
+        dest.write_bytes(content)
+        saved.append(str(dest))
+    return {"files": saved, "count": len(saved)}
+
+
+@router.get("/mcp/status")
+async def mcp_status(current_user: User = Depends(get_current_user)):
+    from app.mcp.loader import register_mcp_skills
+    from app.skills.registry import SKILL_REGISTRY
+
+    count = await register_mcp_skills()
+    mcp_tools = [k for k in SKILL_REGISTRY if k.startswith("mcp_")]
+    return {
+        "mcp_tools_registered": len(mcp_tools),
+        "tools": mcp_tools,
+        "tavily_mcp": bool(settings.tavily_mcp_url or settings.tavily_api_key),
+    }
 
 
 @router.post("/chat/stream")
@@ -198,6 +250,7 @@ async def chat_stream(
                 session_id=request.session_id,
                 model_name=model_name,
                 user_input=request.message,
+                attachments=request.attachments or None,
             ):
                 yield _format_sse(event["event"], event["data"])
 

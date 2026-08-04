@@ -48,6 +48,8 @@ class ChatRequest(BaseModel):
     session_id: uuid.UUID
     model_name: str | None = None
     message: str = Field(min_length=1)
+    use_swarm: bool = False
+    attachments: list[str] = Field(default_factory=list)
 
 
 class ChatResponse(BaseModel):
@@ -55,6 +57,7 @@ class ChatResponse(BaseModel):
     session_id: uuid.UUID
     model_name: str
     tool_calls_made: list[str] = []
+    agents_used: list[str] = []
 
 
 class MessageResponse(BaseModel):
@@ -69,6 +72,13 @@ class MessageResponse(BaseModel):
 class ModelInfo(BaseModel):
     id: str
     name: str
+    provider: str = ""
+    tier: str = "free"
+    backend: str = "mlx"
+    available: bool = True
+    supports_tools: bool = False
+    description: str = ""
+    context_k: int = 8
 
 
 class ScheduleSkillRequest(BaseModel):
@@ -81,6 +91,11 @@ class ScheduleSkillResponse(BaseModel):
     task_id: uuid.UUID
     status: str
     message: str
+
+
+class SkillInfo(BaseModel):
+    name: str
+    description: str
 
 
 class SkillExecuteRequest(BaseModel):

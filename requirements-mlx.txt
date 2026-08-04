@@ -1,0 +1,4 @@
+# MLX-LM for Apple Silicon (M1/M2/M3/M4)
+# Install: pip install -r requirements-mlx.txt
+mlx-lm>=0.22.0
+huggingface-hub>=0.34.0

@@ -24,7 +24,39 @@ Multi-Agent automation system integrating vLLM inference, Chain-of-Thought reaso
                     └─────────────┘
 ```
 
-## Quick Start
+## Quick Start (MacBook Air M2 — Apple Silicon)
+
+```bash
+cp .env.example .env
+./scripts/start_dev.sh    # starts mlx-lm + backend + frontend
+```
+
+Open **http://localhost:3000**. The default LLM is **MLX-LM** on port 8000.
+
+### Manual MLX-LM start (separate terminal)
+
+```bash
+./scripts/start_llm_mlx.sh
+# or with 8B model (16GB+ RAM recommended):
+./scripts/start_llm_mlx.sh mlx-community/Meta-Llama-3.1-8B-Instruct-4bit
+```
+
+### LLM Backend Switch
+
+| Platform | Backend | Start script | Model example |
+|----------|---------|--------------|---------------|
+| Mac M1/M2/M3/M4 | `mlx` | `./scripts/start_llm_mlx.sh` | `mlx-community/Llama-3.2-3B-Instruct-4bit` |
+| NVIDIA GPU | `vllm` | `./scripts/start_vllm.sh` | `meta-llama/Llama-3.1-8B-Instruct` |
+
+Set in `.env`:
+
+```bash
+LLM_BACKEND=mlx
+LLM_BASE_URL=http://localhost:8000/v1
+LLM_DEFAULT_MODEL=mlx-community/Llama-3.2-3B-Instruct-4bit
+```
+
+## Quick Start (NVIDIA GPU + vLLM)
 
 ```bash
 cp .env.example .env

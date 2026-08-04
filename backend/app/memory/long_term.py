@@ -27,7 +27,7 @@ class LongTermMemory:
         self._qdrant = QdrantClient(host=settings.qdrant_host, port=settings.qdrant_port)
         self._encoder = AsyncOpenAI(
             base_url=settings.embedding_base_url,
-            api_key=settings.vllm_api_key,
+            api_key=settings.llm_api_key,
         )
         self._ensure_collection()
         self._available = True
