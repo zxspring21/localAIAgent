@@ -24,6 +24,8 @@ GOOGLE_TOKEN = "https://oauth2.googleapis.com/token"
 GOOGLE_AUTH = "https://accounts.google.com/o/oauth2/v2/auth"
 APPLE_KEYS = "https://appleid.apple.com/auth/keys"
 APPLE_ISSUER = "https://appleid.apple.com"
+APPLE_AUTH = "https://appleid.apple.com/auth/authorize"
+APPLE_TOKEN = "https://appleid.apple.com/auth/token"
 
 
 def oauth_status() -> dict[str, bool]:
@@ -91,6 +93,69 @@ async def verify_google_id_token(id_token: str) -> dict[str, Any]:
         "email": email,
         "name": data.get("name") or email.split("@")[0],
     }
+
+
+def apple_client_secret() -> str:
+    if not (
+        settings.apple_oauth_client_id
+        and settings.apple_oauth_team_id
+        and settings.apple_oauth_key_id
+        and settings.apple_oauth_private_key
+    ):
+        raise HTTPException(status_code=400, detail="Apple web OAuth is not fully configured")
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    pem = settings.apple_oauth_private_key.replace("\\n", "\n")
+    return jwt.encode(
+        {
+            "iss": settings.apple_oauth_team_id,
+            "iat": now,
+            "exp": now + timedelta(minutes=15),
+            "aud": APPLE_ISSUER,
+            "sub": settings.apple_oauth_client_id,
+        },
+        pem,
+        algorithm="ES256",
+        headers={"kid": settings.apple_oauth_key_id},
+    )
+
+
+def apple_authorize_url(state: str) -> str:
+    if not settings.apple_oauth_client_id:
+        raise HTTPException(status_code=400, detail="Apple Sign In is not configured")
+    redirect = f"{settings.api_public_url.rstrip('/')}/api/v1/auth/oauth/apple/callback"
+    from urllib.parse import urlencode
+
+    qs = urlencode(
+        {
+            "client_id": settings.apple_oauth_client_id,
+            "redirect_uri": redirect,
+            "response_type": "code",
+            "response_mode": "form_post",
+            "scope": "name email",
+            "state": state,
+        }
+    )
+    return f"{APPLE_AUTH}?{qs}"
+
+
+async def apple_exchange_code(code: str) -> dict[str, Any]:
+    redirect = f"{settings.api_public_url.rstrip('/')}/api/v1/auth/oauth/apple/callback"
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        resp = await client.post(
+            APPLE_TOKEN,
+            data={
+                "client_id": settings.apple_oauth_client_id,
+                "client_secret": apple_client_secret(),
+                "code": code,
+                "grant_type": "authorization_code",
+                "redirect_uri": redirect,
+            },
+        )
+        if resp.status_code != 200:
+            raise HTTPException(status_code=401, detail=f"Apple token exchange failed: {resp.text[:200]}")
+        return resp.json()
 
 
 async def verify_apple_identity_token(identity_token: str) -> dict[str, Any]:

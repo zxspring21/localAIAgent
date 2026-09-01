@@ -1,9 +1,17 @@
 """Route chat requests to the correct LLM client and model id."""
 
+from __future__ import annotations
+
+from typing import Any
+
 from openai import AsyncOpenAI
 
 from app.config import settings
 from app.llm.registry import ModelSpec, resolve_model
+
+# OpenAI SDK rejects these as create() kwargs. MLX accepts them in the JSON body.
+_MLX_ONLY_BODY_KEYS = ("repetition_penalty", "repetition_context_size")
+_PENALTY_KEYS = ("frequency_penalty", "presence_penalty")
 
 CLOUD_BASE_URLS = {
     "openai": "https://api.openai.com/v1",
@@ -79,10 +87,35 @@ def mlx_extra_body() -> dict:
     }
 
 
+def sanitize_completion_kwargs(kwargs: dict[str, Any], spec: ModelSpec) -> dict[str, Any]:
+    """Never pass repetition_penalty as a Python kwarg to AsyncCompletions.create()."""
+    out = dict(kwargs)
+    extra = dict(out.pop("extra_body", None) or {})
+
+    for key in _MLX_ONLY_BODY_KEYS:
+        if key in out:
+            extra[key] = out.pop(key)
+
+    if spec.backend == "mlx":
+        extra.update(mlx_extra_body())
+    else:
+        for key in _MLX_ONLY_BODY_KEYS:
+            extra.pop(key, None)
+
+    if spec.backend in ("google", "anthropic"):
+        for key in _PENALTY_KEYS:
+            out.pop(key, None)
+
+    if extra:
+        out["extra_body"] = extra
+    return out
+
+
 def attach_generation_extras(kwargs: dict, spec: ModelSpec) -> dict:
     """Add backend-specific params without breaking AsyncOpenAI type checks."""
-    if spec.backend == "mlx":
-        extra = dict(kwargs.get("extra_body") or {})
-        extra.update(mlx_extra_body())
-        kwargs["extra_body"] = extra
-    return kwargs
+    return sanitize_completion_kwargs(kwargs, spec)
+
+
+async def create_chat_completion(client: AsyncOpenAI, spec: ModelSpec, **kwargs: Any):
+    """Single entry for chat.completions.create with SDK-safe kwargs."""
+    return await client.chat.completions.create(**sanitize_completion_kwargs(kwargs, spec))

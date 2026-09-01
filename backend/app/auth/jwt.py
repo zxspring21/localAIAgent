@@ -52,8 +52,12 @@ async def register_user(db: AsyncSession, username: str, password: str, email: s
     existing = await db.execute(select(User).where(User.username == username))
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username already exists")
+    if email:
+        taken = await db.execute(select(User).where(User.email == email))
+        if taken.scalar_one_or_none():
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
 
-    user = User(username=username, email=email, password_hash=hash_password(password))
+    user = User(username=username, email=email, password_hash=hash_password(password), auth_provider="email")
     db.add(user)
     await db.commit()
     await db.refresh(user)

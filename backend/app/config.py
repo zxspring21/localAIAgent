@@ -79,6 +79,9 @@ class Settings(BaseSettings):
     google_oauth_client_id: str = ""
     google_oauth_client_secret: str = ""
     apple_oauth_client_id: str = ""
+    apple_oauth_team_id: str = ""
+    apple_oauth_key_id: str = ""
+    apple_oauth_private_key: str = ""
 
     sandbox_enabled: bool = True
 

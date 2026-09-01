@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.agents.validator import validate_answer
-from app.llm.router import attach_generation_extras, get_llm_client, validate_model
+from app.llm.router import create_chat_completion, get_llm_client, validate_model
 from app.memory import memory_manager
 from app.runtime.sandbox import agent_run_sandbox
 from app.skills.registry import execute_skill
@@ -49,26 +49,24 @@ async def _run_swarm_body(
         rag_text = "\n".join(c.get("content", "")[:400] for c in mem_ctx.rag_chunks[:3])
         memory_block += f"\n\nRelevant documents:\n{rag_text}"
 
-    plan_kwargs = attach_generation_extras(
-        {
-            "model": api_model,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a task planner. Break the user request into 1-3 subtasks. "
-                        "Return JSON: {\"subtasks\": [{\"agent\": \"researcher|analyst|executor\", "
-                        "\"task\": \"description\"}]}"
-                    ),
-                },
-                {"role": "user", "content": user_input + memory_block},
-            ],
-            "max_tokens": 512,
-            "temperature": 0.3,
-        },
+    plan_resp = await create_chat_completion(
+        client,
         spec,
+        model=api_model,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a task planner. Break the user request into 1-3 subtasks. "
+                    "Return JSON: {\"subtasks\": [{\"agent\": \"researcher|analyst|executor\", "
+                    "\"task\": \"description\"}]}"
+                ),
+            },
+            {"role": "user", "content": user_input + memory_block},
+        ],
+        max_tokens=512,
+        temperature=0.3,
     )
-    plan_resp = await client.chat.completions.create(**plan_kwargs)
     plan_text = plan_resp.choices[0].message.content or "{}"
     agents_used.append("planner")
 
@@ -90,19 +88,17 @@ async def _run_swarm_body(
         role = next((r for r in SUB_AGENT_ROLES if r["name"] == agent_name), SUB_AGENT_ROLES[0])
         agents_used.append(agent_name)
 
-        agent_kwargs = attach_generation_extras(
-            {
-                "model": api_model,
-                "messages": [
-                    {"role": "system", "content": f"You are the {agent_name} sub-agent. {role['description']}"},
-                    {"role": "user", "content": task},
-                ],
-                "max_tokens": settings.llm_max_tokens,
-                "temperature": 0.5,
-            },
+        agent_resp = await create_chat_completion(
+            client,
             spec,
+            model=api_model,
+            messages=[
+                {"role": "system", "content": f"You are the {agent_name} sub-agent. {role['description']}"},
+                {"role": "user", "content": task},
+            ],
+            max_tokens=settings.llm_max_tokens,
+            temperature=0.5,
         )
-        agent_resp = await client.chat.completions.create(**agent_kwargs)
         agent_output = agent_resp.choices[0].message.content or ""
 
         if agent_name == "researcher" or "search" in task.lower():
@@ -123,25 +119,23 @@ async def _run_swarm_body(
 
         observations.append(f"### {agent_name.upper()}\nTask: {task}\n\n{agent_output}")
 
-    synth_kwargs = attach_generation_extras(
-        {
-            "model": api_model,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "Synthesize sub-agent results into one clear, complete answer for the user.",
-                },
-                {
-                    "role": "user",
-                    "content": f"Original request: {user_input}\n\nSub-agent outputs:\n" + "\n\n".join(observations),
-                },
-            ],
-            "max_tokens": settings.llm_max_tokens,
-            "temperature": 0.6,
-        },
+    synth_resp = await create_chat_completion(
+        client,
         spec,
+        model=api_model,
+        messages=[
+            {
+                "role": "system",
+                "content": "Synthesize sub-agent results into one clear, complete answer for the user.",
+            },
+            {
+                "role": "user",
+                "content": f"Original request: {user_input}\n\nSub-agent outputs:\n" + "\n\n".join(observations),
+            },
+        ],
+        max_tokens=settings.llm_max_tokens,
+        temperature=0.6,
     )
-    synth_resp = await client.chat.completions.create(**synth_kwargs)
     final = synth_resp.choices[0].message.content or "No response generated."
     agents_used.append("synthesizer")
 

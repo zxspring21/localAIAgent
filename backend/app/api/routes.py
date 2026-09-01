@@ -3,7 +3,7 @@ import logging
 import uuid
 from collections.abc import AsyncGenerator
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import RedirectResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +14,8 @@ from app.auth.oauth import (
     frontend_callback_url,
     google_authorize_url,
     google_exchange_code,
+    apple_authorize_url,
+    apple_exchange_code,
     issue_token,
     oauth_status,
     upsert_oauth_user,
@@ -116,6 +118,31 @@ async def google_oauth_token(body: OAuthTokenRequest, db: AsyncSession = Depends
     identity = await verify_google_id_token(body.id_token)
     user = await upsert_oauth_user(db, identity)
     return TokenResponse(access_token=issue_token(user))
+
+
+@router.get("/auth/oauth/apple/start")
+async def apple_oauth_start():
+    import secrets
+
+    url = apple_authorize_url(secrets.token_urlsafe(16))
+    return RedirectResponse(url)
+
+
+@router.post("/auth/oauth/apple/callback")
+async def apple_oauth_callback(
+    code: str | None = Form(default=None),
+    error: str | None = Form(default=None),
+    db: AsyncSession = Depends(get_db),
+):
+    if error or not code:
+        raise HTTPException(status_code=401, detail=error or "Missing authorization code")
+    tokens = await apple_exchange_code(code)
+    id_token = tokens.get("id_token")
+    if not id_token:
+        raise HTTPException(status_code=401, detail="Apple did not return an ID token")
+    identity = await verify_apple_identity_token(id_token)
+    user = await upsert_oauth_user(db, identity)
+    return RedirectResponse(frontend_callback_url(issue_token(user)))
 
 
 @router.post("/auth/oauth/apple", response_model=TokenResponse)

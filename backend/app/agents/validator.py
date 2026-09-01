@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from openai import AsyncOpenAI
 
 from app.config import settings
-from app.llm.router import attach_generation_extras
+from app.llm.router import create_chat_completion
 from app.memory.manager import MemoryContext
 from app.skills.registry import execute_skill
 
@@ -121,8 +121,11 @@ Respond with JSON only:
             "presence_penalty": settings.llm_presence_penalty,
         }
         if spec is not None:
-            kwargs = attach_generation_extras(kwargs, spec)
-        resp = await client.chat.completions.create(**kwargs)
+            resp = await create_chat_completion(client, spec, **kwargs)
+        else:
+            kwargs.pop("frequency_penalty", None)
+            kwargs.pop("presence_penalty", None)
+            resp = await client.chat.completions.create(**kwargs)
         raw = resp.choices[0].message.content or "{}"
         start = raw.find("{")
         end = raw.rfind("}") + 1

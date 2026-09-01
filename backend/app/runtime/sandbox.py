@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import AsyncIterator
 
+from app.config import settings
 from app.runtime.hooks import fire_hook
 
 logger = logging.getLogger(__name__)
@@ -43,10 +44,12 @@ class AgentSandbox:
                 "workdir": str(self.workdir),
             },
         )
-        try:
-            shutil.rmtree(self.workdir, ignore_errors=True)
-        except Exception as e:
-            logger.warning("Sandbox teardown failed: %s", e)
+        isolated = self.extra.get("isolated", True)
+        if isolated:
+            try:
+                shutil.rmtree(self.workdir, ignore_errors=True)
+            except Exception as e:
+                logger.warning("Sandbox teardown failed: %s", e)
         self.active = False
         logger.info("Sandbox ended run_id=%s kind=%s", self.run_id, self.kind)
 
@@ -81,15 +84,20 @@ async def agent_run_sandbox(
     kind: str = "chat",
 ) -> AsyncIterator[AgentSandbox]:
     run_id = str(uuid.uuid4())
-    root = Path(os.getenv("AGENT_SANDBOX_ROOT") or tempfile.gettempdir()) / "localai-sandboxes"
-    root.mkdir(parents=True, exist_ok=True)
-    workdir = Path(tempfile.mkdtemp(prefix=f"{kind}-{run_id[:8]}-", dir=root))
+    if settings.sandbox_enabled:
+        root = Path(os.getenv("AGENT_SANDBOX_ROOT") or tempfile.gettempdir()) / "localai-sandboxes"
+        root.mkdir(parents=True, exist_ok=True)
+        workdir = Path(tempfile.mkdtemp(prefix=f"{kind}-{run_id[:8]}-", dir=root))
+    else:
+        workdir = Path.cwd()
+
     box = AgentSandbox(
         run_id=run_id,
         user_id=str(user_id),
         session_id=str(session_id),
         kind=kind,
         workdir=workdir,
+        extra={"isolated": settings.sandbox_enabled},
     )
     token = _current.set(box)
     fire_hook(
@@ -102,7 +110,7 @@ async def agent_run_sandbox(
             "workdir": str(workdir),
         },
     )
-    logger.info("Sandbox started run_id=%s kind=%s dir=%s", run_id, kind, workdir)
+    logger.info("Sandbox started run_id=%s kind=%s dir=%s isolated=%s", run_id, kind, workdir, settings.sandbox_enabled)
     try:
         yield box
     finally:

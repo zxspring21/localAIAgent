@@ -54,7 +54,7 @@ export default function AuthPage({ onAuth }) {
               <a className="oauth-btn" href={api.googleOAuthStartUrl()}>Continue with Google</a>
             )}
             {providers.apple && (
-              <p className="oauth-hint">Apple Sign In is available in the iOS app.</p>
+              <a className="oauth-btn" href={api.appleOAuthStartUrl()}>Continue with Apple</a>
             )}
           </div>
         )}

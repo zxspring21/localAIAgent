@@ -45,9 +45,24 @@ Config: `ANSWER_VALIDATION_ENABLED=true`, `VALIDATION_USE_WEB_SEARCH=true`
 
 Prevents MLX models from looping identical tokens during SSE streaming:
 
-- `repetition_penalty` / `frequency_penalty` on LLM requests
+- `repetition_penalty` is sent only in `extra_body` for MLX (OpenAI SDK rejects it as a `create()` kwarg)
+- `frequency_penalty` / `presence_penalty` on OpenAI-compatible requests
 - Stream circuit breaker (stops after 8 identical deltas)
 - Post-processing `collapse_repetition()` on final text
+
+## Hermes protocol (`backend/app/brain/hermes.py`)
+
+When native tool-calling is off (typical MLX), the controller parses Thought / Action / Final Answer and runs skills through hooks.
+
+## Runtime (`backend/app/runtime/`)
+
+- **Hooks** — AgentStart, PreToolUse, PostToolUse, AgentComplete
+- **Plugins** — `plugins/*/plugin.json` + SKILL.md + hooks.json
+- **Sandbox** — isolated workdir per run; `AgentComplete` + directory delete when the agent loop finishes (`finally`)
+
+## Auth (web + mobile)
+
+Email register/login, Google OAuth, Apple (web form_post + native ID token). JWT for all `/api/v1` routes except auth + health.
 
 See `docs/ARCHITECTURE.md` for full technical reference and Mermaid diagrams.
 

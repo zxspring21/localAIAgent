@@ -66,6 +66,10 @@ class ApiClient {
     return `${API_BASE}/api/v1/auth/oauth/google/start`
   }
 
+  appleOAuthStartUrl() {
+    return `${API_BASE}/api/v1/auth/oauth/apple/start`
+  }
+
   loginApple(idToken) {
     return this.request('/auth/oauth/apple', {
       method: 'POST',

@@ -24,7 +24,7 @@ from app.brain.hermes import (
     parse_hermes,
     run_hermes_action,
 )
-from app.llm.router import attach_generation_extras, get_llm_client, use_tools_for_model, validate_model
+from app.llm.router import create_chat_completion, get_llm_client, use_tools_for_model, validate_model
 from app.memory import memory_manager
 from app.runtime.plugins import plugin_prompt_block
 from app.runtime.sandbox import agent_run_sandbox
@@ -125,7 +125,7 @@ class CoreController:
                 kwargs["tools"] = tools
                 kwargs["tool_choice"] = "auto"
 
-        return attach_generation_extras(kwargs, spec)
+        return kwargs
 
     async def _finalize_answer(
         self,
@@ -234,8 +234,8 @@ class CoreController:
         try:
             for iteration in range(settings.max_cot_iterations):
                 iterations = iteration + 1
-                response = await client.chat.completions.create(
-                    **self._completion_kwargs(api_model, messages, spec),
+                response = await create_chat_completion(
+                    client, spec, **self._completion_kwargs(api_model, messages, spec)
                 )
 
                 response_message = response.choices[0].message
@@ -358,7 +358,9 @@ class CoreController:
                 if iteration > 0:
                     yield {"event": "thinking", "data": {"iteration": iteration + 1}}
 
-                stream = await client.chat.completions.create(
+                stream = await create_chat_completion(
+                    client,
+                    spec,
                     **self._completion_kwargs(api_model, messages, spec, stream=True),
                 )
 
