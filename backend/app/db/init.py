@@ -11,6 +11,8 @@ async def init_database() -> None:
     """Create tables if they do not exist (idempotent)."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(32) DEFAULT 'email'"))
+        await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS oauth_sub VARCHAR(255)"))
     logger.info("Database schema ready.")
 
 

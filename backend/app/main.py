@@ -6,14 +6,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from app.agents.swarm import run_swarm
 from app.api.routes import router
 from app.api.test_routes import router as test_router
 from app.automation.scheduler import start_scheduler, stop_scheduler
 from app.config import settings
 from app.db.init import check_database_connection, init_database
-from app.memory import lt_memory, st_memory
+from app.memory import lt_memory, rag_store, st_memory
 from app.mcp.loader import register_mcp_skills
+from app.runtime.plugins import load_plugins
 from app.skills import builtin  # noqa: F401 - register built-in skills
 
 logging.basicConfig(level=logging.DEBUG if settings.app_debug else logging.INFO)
@@ -40,6 +40,16 @@ async def lifespan(app: FastAPI):
         lt_memory.connect()
     except Exception as e:
         logger.warning("Qdrant unavailable (LT vector search disabled): %s", e)
+    try:
+        rag_store.connect()
+    except Exception as e:
+        logger.warning("Qdrant RAG collection unavailable: %s", e)
+    try:
+        n = load_plugins()
+        if n:
+            logger.info("Loaded %d plugins", n)
+    except Exception as e:
+        logger.warning("Plugin load skipped: %s", e)
     try:
         n = await register_mcp_skills()
         if n:

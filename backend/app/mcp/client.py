@@ -14,8 +14,15 @@ class MCPClient:
     def __init__(self, server_url: str, name: str = "mcp"):
         self.server_url = server_url.rstrip("/")
         self.name = name
-        self._session_id = str(uuid.uuid4())
         self._initialized = False
+
+    def _parse_response(self, resp: httpx.Response) -> Any:
+        text = resp.text.strip()
+        if text.startswith("event:"):
+            for line in text.split("\n"):
+                if line.startswith("data:"):
+                    return json.loads(line[5:].strip())
+        return resp.json()
 
     async def _request(self, method: str, params: dict | None = None) -> Any:
         payload = {
@@ -34,12 +41,26 @@ class MCPClient:
                 },
             )
             resp.raise_for_status()
-            text = resp.text.strip()
-            if text.startswith("event:"):
-                for line in text.split("\n"):
-                    if line.startswith("data:"):
-                        return json.loads(line[5:].strip())
-            return resp.json()
+            return self._parse_response(resp)
+
+    def _request_sync(self, method: str, params: dict | None = None) -> Any:
+        payload = {
+            "jsonrpc": "2.0",
+            "id": str(uuid.uuid4()),
+            "method": method,
+            "params": params or {},
+        }
+        with httpx.Client(timeout=60.0) as client:
+            resp = client.post(
+                self.server_url,
+                json=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/event-stream",
+                },
+            )
+            resp.raise_for_status()
+            return self._parse_response(resp)
 
     async def initialize(self) -> None:
         if self._initialized:
@@ -69,8 +90,21 @@ class MCPClient:
 
     async def call_tool(self, tool_name: str, arguments: dict) -> str:
         await self.initialize()
+        return self.call_tool_sync(tool_name, arguments)
+
+    def call_tool_sync(self, tool_name: str, arguments: dict) -> str:
         try:
-            result = await self._request(
+            if not self._initialized:
+                self._request_sync(
+                    "initialize",
+                    {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {},
+                        "clientInfo": {"name": "localai-agent", "version": "1.0.0"},
+                    },
+                )
+                self._initialized = True
+            result = self._request_sync(
                 "tools/call",
                 {"name": tool_name, "arguments": arguments},
             )

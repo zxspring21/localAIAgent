@@ -1,0 +1,7 @@
+{
+  "name": "safe-tools",
+  "version": "1.0.0",
+  "description": "Example Claude-style plugin: deny high-risk tools unless explicitly allowed.",
+  "hooks": "hooks.json",
+  "skill": "SKILL.md"
+}

@@ -15,6 +15,16 @@ class UserLogin(BaseModel):
     password: str
 
 
+class OAuthTokenRequest(BaseModel):
+    id_token: str
+
+
+class AuthProviders(BaseModel):
+    email: bool = True
+    google: bool = False
+    apple: bool = False
+
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -25,6 +35,7 @@ class UserResponse(BaseModel):
     username: str
     email: str | None
     created_at: datetime
+    auth_provider: str = "email"
 
     model_config = {"from_attributes": True}
 
@@ -58,6 +69,7 @@ class ChatResponse(BaseModel):
     model_name: str
     tool_calls_made: list[str] = []
     agents_used: list[str] = []
+    validation: dict = Field(default_factory=dict)
 
 
 class MessageResponse(BaseModel):
@@ -142,3 +154,14 @@ class TestSuiteResponse(BaseModel):
     failed: int
     results: list[TestResult]
     ports: dict = Field(default_factory=dict)
+
+
+class RAGIndexRequest(BaseModel):
+    file_paths: list[str] = Field(min_length=1)
+
+
+class DocumentInfo(BaseModel):
+    id: str
+    filename: str
+    chunk_count: int
+    created_at: str

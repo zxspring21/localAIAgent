@@ -1,6 +1,5 @@
 """Register MCP server tools into the skill registry."""
 
-import asyncio
 import logging
 from typing import Any
 
@@ -15,22 +14,22 @@ _mcp_registered = False
 def _register_mcp_tool(client: MCPClient, tool: dict[str, Any]) -> None:
     name = tool.get("name", "")
     description = tool.get("description", f"MCP tool from {client.name}")
-    if not name or name in SKILL_REGISTRY:
+    skill_name = f"mcp_{client.name}_{name}"
+    if not name or skill_name in SKILL_REGISTRY:
         return
 
     input_schema = tool.get("inputSchema", {"type": "object", "properties": {}})
 
     def make_handler(c: MCPClient, tool_name: str):
         def handler(**kwargs) -> str:
-            return asyncio.run(c.call_tool(tool_name, kwargs))
+            return c.call_tool_sync(tool_name, kwargs)
 
-        handler.__annotations__ = {
-            k: str for k in input_schema.get("properties", {}).keys()
-        }
+        handler.__annotations__ = {k: str for k in input_schema.get("properties", {}).keys()}
         return handler
 
-    handler = make_handler(client, name)
-    skill(name=f"mcp_{client.name}_{name}", description=f"[MCP/{client.name}] {description}")(handler)
+    skill(name=skill_name, description=f"[MCP/{client.name}] {description}")(
+        make_handler(client, name)
+    )
 
 
 async def register_mcp_skills() -> int:
@@ -49,6 +48,7 @@ async def register_mcp_skills() -> int:
         ("mcp_slack_url", "slack"),
         ("mcp_notion_url", "notion"),
         ("mcp_gmail_url", "gmail"),
+        ("mcp_facebook_url", "facebook"),
     ]:
         url = getattr(settings, url_attr, "")
         if url:
@@ -66,10 +66,3 @@ async def register_mcp_skills() -> int:
 
     _mcp_registered = True
     return count
-
-
-def ensure_mcp_skills_sync() -> None:
-    try:
-        asyncio.get_event_loop().run_until_complete(register_mcp_skills())
-    except RuntimeError:
-        asyncio.run(register_mcp_skills())

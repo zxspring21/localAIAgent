@@ -4,24 +4,39 @@ import uuid
 from collections.abc import AsyncGenerator
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.swarm import run_swarm
 from app.auth.jwt import authenticate_user, create_access_token, get_current_user, register_user
+from app.auth.oauth import (
+    frontend_callback_url,
+    google_authorize_url,
+    google_exchange_code,
+    issue_token,
+    oauth_status,
+    upsert_oauth_user,
+    verify_apple_identity_token,
+    verify_google_id_token,
+)
 from app.automation.scheduler import create_scheduled_task, remove_scheduled_job
 from app.brain.controller import brain
 from app.config import settings
-from app.memory import lt_memory, st_memory
+from app.llm.registry import resolve_model
+from app.memory import lt_memory, memory_manager, rag_store, st_memory
 from app.models.database import Session, User, get_db
 from app.models.schemas import (
     AsyncChatResponse,
     AsyncTaskStatus,
     ChatRequest,
     ChatResponse,
+    AuthProviders,
+    OAuthTokenRequest,
     MessageResponse,
     ModelInfo,
+    RAGIndexRequest,
+    DocumentInfo,
     ScheduleSkillRequest,
     ScheduleSkillResponse,
     SessionCreate,
@@ -66,6 +81,57 @@ async def me(current_user: User = Depends(get_current_user)):
     return current_user
 
 
+@router.get("/auth/providers", response_model=AuthProviders)
+async def auth_providers():
+    return AuthProviders(**oauth_status())
+
+
+@router.get("/auth/oauth/google/start")
+async def google_oauth_start():
+    import secrets
+
+    url = google_authorize_url(secrets.token_urlsafe(16))
+    return RedirectResponse(url)
+
+
+@router.get("/auth/oauth/google/callback")
+async def google_oauth_callback(
+    code: str | None = None,
+    error: str | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    if error or not code:
+        raise HTTPException(status_code=401, detail=error or "Missing authorization code")
+    tokens = await google_exchange_code(code)
+    id_token = tokens.get("id_token")
+    if not id_token:
+        raise HTTPException(status_code=401, detail="Google did not return an ID token")
+    identity = await verify_google_id_token(id_token)
+    user = await upsert_oauth_user(db, identity)
+    return RedirectResponse(frontend_callback_url(issue_token(user)))
+
+
+@router.post("/auth/oauth/google", response_model=TokenResponse)
+async def google_oauth_token(body: OAuthTokenRequest, db: AsyncSession = Depends(get_db)):
+    identity = await verify_google_id_token(body.id_token)
+    user = await upsert_oauth_user(db, identity)
+    return TokenResponse(access_token=issue_token(user))
+
+
+@router.post("/auth/oauth/apple", response_model=TokenResponse)
+async def apple_oauth_token(body: OAuthTokenRequest, db: AsyncSession = Depends(get_db)):
+    identity = await verify_apple_identity_token(body.id_token)
+    user = await upsert_oauth_user(db, identity)
+    return TokenResponse(access_token=issue_token(user))
+
+
+@router.get("/runtime/plugins")
+async def runtime_plugins(current_user: User = Depends(get_current_user)):
+    from app.runtime.plugins import list_plugins
+
+    return {"plugins": list_plugins()}
+
+
 @router.get("/models", response_model=list[ModelInfo])
 async def get_models(current_user: User = Depends(get_current_user)):
     models = await brain.list_models()
@@ -86,7 +152,7 @@ async def create_session(
     session = Session(
         user_id=current_user.id,
         title=body.title,
-        model_name=body.model_name or settings.llm_default_model,
+        model_name=resolve_model(body.model_name or settings.llm_default_model).id,
     )
     db.add(session)
     await db.commit()
@@ -173,6 +239,7 @@ async def chat(
                 "model_name": swarm_result.model_name,
                 "tool_calls_made": swarm_result.tool_calls_made,
                 "agents_used": swarm_result.agents_used,
+                "validation": swarm_result.validation,
             })()
         else:
             process_result = await brain.process_request(
@@ -196,19 +263,23 @@ async def chat(
         model_name=process_result.model_name,
         tool_calls_made=process_result.tool_calls_made,
         agents_used=getattr(process_result, "agents_used", []),
+        validation=getattr(process_result, "validation", {}),
     )
 
 
 @router.post("/uploads")
 async def upload_files(
     files: list[UploadFile] = File(...),
+    index_rag: bool = True,
     current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     from pathlib import Path
 
     upload_dir = Path("uploads") / str(current_user.id)
     upload_dir.mkdir(parents=True, exist_ok=True)
     saved: list[str] = []
+    indexed: list[dict] = []
     for f in files:
         dest = upload_dir / f.filename
         content = await f.read()
@@ -216,7 +287,40 @@ async def upload_files(
             raise HTTPException(status_code=400, detail=f"File too large: {f.filename}")
         dest.write_bytes(content)
         saved.append(str(dest))
-    return {"files": saved, "count": len(saved)}
+
+    if index_rag and settings.rag_enabled:
+        indexed = await memory_manager.index_uploaded_files(db, current_user.id, saved)
+
+    return {"files": saved, "count": len(saved), "indexed": indexed}
+
+
+@router.get("/rag/documents", response_model=list[DocumentInfo])
+async def list_rag_documents(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    docs = await rag_store.list_documents(db, current_user.id)
+    return [
+        DocumentInfo(
+            id=str(d.id),
+            filename=d.filename,
+            chunk_count=d.chunk_count,
+            created_at=d.created_at.isoformat(),
+        )
+        for d in docs
+    ]
+
+
+@router.post("/rag/index")
+async def index_rag_files(
+    body: RAGIndexRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if not settings.rag_enabled:
+        raise HTTPException(status_code=400, detail="RAG is disabled")
+    indexed = await memory_manager.index_uploaded_files(db, current_user.id, body.file_paths)
+    return {"indexed": indexed, "count": len(indexed)}
 
 
 @router.get("/mcp/status")

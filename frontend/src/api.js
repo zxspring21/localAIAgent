@@ -54,8 +54,23 @@ class ApiClient {
     })
   }
 
-  getMe() {
+    getMe() {
     return this.request('/auth/me')
+  }
+
+  getAuthProviders() {
+    return this.request('/auth/providers')
+  }
+
+  googleOAuthStartUrl() {
+    return `${API_BASE}/api/v1/auth/oauth/google/start`
+  }
+
+  loginApple(idToken) {
+    return this.request('/auth/oauth/apple', {
+      method: 'POST',
+      body: JSON.stringify({ id_token: idToken }),
+    })
   }
 
   getModels() {
@@ -81,17 +96,29 @@ class ApiClient {
     return this.request(`/sessions/${sessionId}`, { method: 'DELETE' })
   }
 
-  chat(sessionId, message, modelName) {
+  chat(sessionId, message, modelName, options = {}) {
     return this.request('/chat', {
       method: 'POST',
-      body: JSON.stringify({ session_id: sessionId, message, model_name: modelName }),
+      body: JSON.stringify({
+        session_id: sessionId,
+        message,
+        model_name: modelName,
+        use_swarm: options.useSwarm || false,
+        attachments: options.attachments || [],
+      }),
     })
   }
 
-  chatAsync(sessionId, message, modelName) {
+  chatAsync(sessionId, message, modelName, options = {}) {
     return this.request('/chat/async', {
       method: 'POST',
-      body: JSON.stringify({ session_id: sessionId, message, model_name: modelName }),
+      body: JSON.stringify({
+        session_id: sessionId,
+        message,
+        model_name: modelName,
+        use_swarm: options.useSwarm || false,
+        attachments: options.attachments || [],
+      }),
     })
   }
 
@@ -114,6 +141,29 @@ class ApiClient {
     return this.request('/skills')
   }
 
+  getRagDocuments() {
+    return this.request('/rag/documents')
+  }
+
+  async uploadFiles(files) {
+    const form = new FormData()
+    for (const f of files) form.append('files', f)
+    const res = await fetch(`${API_BASE}/api/v1/uploads?index_rag=true`, {
+      method: 'POST',
+      headers: this.token ? { Authorization: `Bearer ${this.token}` } : {},
+      body: form,
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.detail || `Upload failed: ${res.status}`)
+    }
+    return res.json()
+  }
+
+  getMcpStatus() {
+    return this.request('/mcp/status')
+  }
+
   getTestOverview() {
     return this.request('/tests/overview')
   }
@@ -122,11 +172,17 @@ class ApiClient {
     return this.request(`/tests/${name}`)
   }
 
-  async chatStream(sessionId, message, modelName, onEvent) {
+  async chatStream(sessionId, message, modelName, onEvent, options = {}) {
     const res = await fetch(`${API_BASE}/api/v1/chat/stream`, {
       method: 'POST',
       headers: this.headers(),
-      body: JSON.stringify({ session_id: sessionId, message, model_name: modelName }),
+      body: JSON.stringify({
+        session_id: sessionId,
+        message,
+        model_name: modelName,
+        use_swarm: options.useSwarm || false,
+        attachments: options.attachments || [],
+      }),
     })
 
     if (!res.ok) {

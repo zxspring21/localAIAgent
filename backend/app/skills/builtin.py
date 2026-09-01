@@ -1,8 +1,8 @@
-import os
 import subprocess
 import tempfile
 from pathlib import Path
 
+from app.runtime.sandbox import resolve_in_sandbox, sandbox_workdir
 from app.skills.registry import skill
 from app.skills.web_search import search_web
 
@@ -60,6 +60,7 @@ def execute_system_command(command: str) -> str:
             capture_output=True,
             text=True,
             timeout=30,
+            cwd=sandbox_workdir(),
         )
         output = result.stdout or result.stderr
         return output or "(no output)"
@@ -72,11 +73,10 @@ def execute_system_command(command: str) -> str:
     description="Read the contents of a file from the local filesystem (read-only, within workspace).",
 )
 def read_file(file_path: str) -> str:
-    path = Path(file_path).resolve()
-    workspace = Path.cwd().resolve()
-
-    if not str(path).startswith(str(workspace)):
-        return "Error: Access denied. File must be within the workspace."
+    try:
+        path = resolve_in_sandbox(file_path)
+    except PermissionError:
+        return "Error: Access denied. File must be within the agent sandbox."
 
     if not path.exists():
         return f"Error: File not found: {file_path}"
@@ -103,11 +103,10 @@ def web_search(query: str) -> str:
     description="List files and directories at a given path within the workspace.",
 )
 def list_directory(directory_path: str) -> str:
-    path = Path(directory_path).resolve()
-    workspace = Path.cwd().resolve()
-
-    if not str(path).startswith(str(workspace)):
-        return "Error: Access denied. Directory must be within the workspace."
+    try:
+        path = resolve_in_sandbox(directory_path)
+    except PermissionError:
+        return "Error: Access denied. Directory must be within the agent sandbox."
 
     if not path.exists():
         return f"Error: Directory not found: {directory_path}"
@@ -125,11 +124,10 @@ def list_directory(directory_path: str) -> str:
     description="Write content to a file within the workspace. Creates parent directories if needed.",
 )
 def write_file(file_path: str, content: str) -> str:
-    path = Path(file_path).resolve()
-    workspace = Path.cwd().resolve()
-
-    if not str(path).startswith(str(workspace)):
-        return "Error: Access denied. File must be within the workspace."
+    try:
+        path = resolve_in_sandbox(file_path)
+    except PermissionError:
+        return "Error: Access denied. File must be within the agent sandbox."
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")

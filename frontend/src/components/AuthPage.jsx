@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '../api'
 import './AuthPage.css'
 
@@ -9,6 +9,11 @@ export default function AuthPage({ onAuth }) {
   const [email, setEmail] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [providers, setProviders] = useState({ email: true, google: false, apple: false })
+
+  useEffect(() => {
+    api.getAuthProviders().then(setProviders).catch(() => {})
+  }, [])
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -41,12 +46,23 @@ export default function AuthPage({ onAuth }) {
           </svg>
           <h1>LocalAI Agent</h1>
         </div>
-        <p className="auth-subtitle">Multi-Agent AI with vLLM, CoT & Skills</p>
+        <p className="auth-subtitle">Online accounts · Hermes agents · RAG memory</p>
+
+        {(providers.google || providers.apple) && (
+          <div className="oauth-row">
+            {providers.google && (
+              <a className="oauth-btn" href={api.googleOAuthStartUrl()}>Continue with Google</a>
+            )}
+            {providers.apple && (
+              <p className="oauth-hint">Apple Sign In is available in the iOS app.</p>
+            )}
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="auth-form">
           <input
             type="text"
-            placeholder="Username"
+            placeholder="Username or email"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
             required
@@ -55,7 +71,7 @@ export default function AuthPage({ onAuth }) {
           {mode === 'register' && (
             <input
               type="email"
-              placeholder="Email (optional)"
+              placeholder="Email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
             />

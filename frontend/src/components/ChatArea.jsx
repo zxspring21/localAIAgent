@@ -2,10 +2,21 @@ import { useState, useRef, useEffect } from 'react'
 import MessageBubble, { TypingIndicator } from './MessageBubble'
 import './ChatArea.css'
 
-export default function ChatArea({ messages, onSend, loading, hasSession }) {
+export default function ChatArea({
+  messages,
+  onSend,
+  loading,
+  hasSession,
+  useSwarm,
+  onSwarmChange,
+  attachments,
+  onUpload,
+  uploadStatus,
+}) {
   const [input, setInput] = useState('')
   const messagesEndRef = useRef(null)
   const textareaRef = useRef(null)
+  const fileInputRef = useRef(null)
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -13,7 +24,7 @@ export default function ChatArea({ messages, onSend, loading, hasSession }) {
 
   const handleSubmit = (e) => {
     e.preventDefault()
-    if (!input.trim() || loading || !hasSession) return
+    if (!input.trim() || loading) return
     onSend(input.trim())
     setInput('')
     if (textareaRef.current) {
@@ -34,10 +45,16 @@ export default function ChatArea({ messages, onSend, loading, hasSession }) {
     e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'
   }
 
+  const handleFileChange = (e) => {
+    const files = Array.from(e.target.files || [])
+    if (files.length && onUpload) onUpload(files)
+    e.target.value = ''
+  }
+
   return (
     <main className="chat-area">
       <div className="messages-container">
-        {!hasSession && (
+        {!hasSession && messages.length === 0 && (
           <div className="welcome">
             <div className="welcome-icon">
               <svg width="48" height="48" viewBox="0 0 32 32" fill="none">
@@ -46,13 +63,10 @@ export default function ChatArea({ messages, onSend, loading, hasSession }) {
               </svg>
             </div>
             <h2>LocalAI Agent</h2>
-            <p>Multi-Agent system with vLLM inference, Chain-of-Thought reasoning, and skill execution.</p>
+            <p>Multi-agent system with MLX inference, RAG, memory, MCP tools, and swarm orchestration.</p>
             <div className="welcome-hints">
               <button onClick={() => onSend('What skills do you have available?')}>
                 What skills do you have?
-              </button>
-              <button onClick={() => onSend('List the files in the current directory')}>
-                List directory files
               </button>
               <button onClick={() => onSend('Search the web for latest AI agent frameworks')}>
                 Web search demo
@@ -67,6 +81,8 @@ export default function ChatArea({ messages, onSend, loading, hasSession }) {
             role={msg.role}
             content={msg.content}
             toolCalls={msg.tool_calls_made}
+            agentsUsed={msg.agents_used}
+            validation={msg.validation}
             activeTools={msg.activeTools}
             streaming={msg.streaming}
           />
@@ -77,13 +93,45 @@ export default function ChatArea({ messages, onSend, loading, hasSession }) {
       </div>
 
       <div className="input-area">
+        <div className="feature-bar">
+          <label className="feature-toggle" title="Multi-agent swarm (planner → sub-agents → synthesizer)">
+            <input
+              type="checkbox"
+              checked={useSwarm}
+              onChange={(e) => onSwarmChange(e.target.checked)}
+            />
+            Swarm
+          </label>
+          <button
+            type="button"
+            className="feature-btn"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={loading}
+            title="Upload documents for RAG"
+          >
+            Attach
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept=".txt,.md,.json,.csv,.py,.js,.ts,.html,.xml,.yaml,.yml"
+            hidden
+            onChange={handleFileChange}
+          />
+          {attachments.length > 0 && (
+            <span className="attachment-count">{attachments.length} file(s)</span>
+          )}
+          {uploadStatus && <span className="upload-status">{uploadStatus}</span>}
+        </div>
+
         <form onSubmit={handleSubmit} className="input-form">
           <textarea
             ref={textareaRef}
             value={input}
             onChange={handleInput}
             onKeyDown={handleKeyDown}
-            placeholder={hasSession ? 'Message LocalAI Agent...' : 'Start a new chat to begin...'}
+            placeholder="Message LocalAI Agent..."
             rows={1}
             disabled={loading}
           />

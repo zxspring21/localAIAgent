@@ -1,0 +1,44 @@
+{
+  "expo": {
+    "name": "LocalAI Agent",
+    "slug": "localai-agent",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "scheme": "localaiagent",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.localai.agent",
+      "usesAppleSignIn": true,
+      "infoPlist": {
+        "CFBundleURLTypes": [
+          {
+            "CFBundleURLSchemes": ["com.googleusercontent.apps.REPLACE_GOOGLE_IOS_CLIENT"]
+          }
+        ]
+      }
+    },
+    "android": {
+      "package": "com.localai.agent",
+      "adaptiveIcon": {
+        "backgroundColor": "#1a1a1a"
+      }
+    },
+    "plugins": [
+      "expo-secure-store",
+      "expo-apple-authentication",
+      [
+        "@react-native-google-signin/google-signin",
+        {
+          "iosUrlScheme": "com.googleusercontent.apps.REPLACE_GOOGLE_IOS_CLIENT"
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "replace-with-eas-project-id"
+      },
+      "apiUrl": "https://api.example.com"
+    }
+  }
+}

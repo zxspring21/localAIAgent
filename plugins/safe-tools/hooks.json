@@ -1,0 +1,7 @@
+{
+  "PreToolUse": [
+    {
+      "deny_skills": ["run_github_code"]
+    }
+  ]
+}

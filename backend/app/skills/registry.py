@@ -71,17 +71,28 @@ def get_skills_definition() -> list[dict[str, Any]]:
     return tools
 
 
+from app.runtime.hooks import fire_hook
+
+
 def execute_skill(name: str, arguments: dict[str, Any]) -> str:
     if name not in SKILL_REGISTRY:
         return f"Error: Skill '{name}' not found."
 
+    pre = fire_hook("PreToolUse", {"skill": name, "name": name, "arguments": arguments})
+    if pre.blocked:
+        return f"Error: {pre.message}"
+
     try:
         result = SKILL_REGISTRY[name]["function"](**arguments)
         if isinstance(result, (dict, list)):
-            return json.dumps(result, ensure_ascii=False, indent=2)
-        return str(result)
+            out = json.dumps(result, ensure_ascii=False, indent=2)
+        else:
+            out = str(result)
     except Exception as e:
-        return f"Error executing skill '{name}': {e}"
+        out = f"Error executing skill '{name}': {e}"
+
+    fire_hook("PostToolUse", {"skill": name, "name": name, "result": out[:2000]})
+    return out
 
 
 def list_skills() -> list[dict[str, str]]:

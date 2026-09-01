@@ -69,3 +69,20 @@ def use_tools_for_model(spec: ModelSpec) -> bool:
     if spec.backend == "mlx":
         return settings.llm_enable_tools
     return spec.supports_tools and settings.llm_enable_tools
+
+
+def mlx_extra_body() -> dict:
+    """MLX-only sampling knobs. Must go in extra_body — the OpenAI SDK rejects them as kwargs."""
+    return {
+        "repetition_penalty": settings.llm_repetition_penalty,
+        "repetition_context_size": settings.llm_repetition_context_size,
+    }
+
+
+def attach_generation_extras(kwargs: dict, spec: ModelSpec) -> dict:
+    """Add backend-specific params without breaking AsyncOpenAI type checks."""
+    if spec.backend == "mlx":
+        extra = dict(kwargs.get("extra_body") or {})
+        extra.update(mlx_extra_body())
+        kwargs["extra_body"] = extra
+    return kwargs

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { BrowserRouter, Routes, Route, Link } from 'react-router-dom'
 import { api } from './api'
-import AuthPage from './components/AuthPage'
+import AuthCallback from './components/AuthCallback'
 import Sidebar from './components/Sidebar'
 import ChatArea from './components/ChatArea'
 import TestDashboard from './components/TestDashboard'
@@ -21,13 +21,18 @@ function ChatApp({ user, onLogout }) {
   const [selectedModel, setSelectedModel] = useState('')
   const [loading, setLoading] = useState(false)
   const [chatMode, setChatMode] = useState('stream')
+  const [useSwarm, setUseSwarm] = useState(false)
+  const [attachments, setAttachments] = useState([])
+  const [uploadStatus, setUploadStatus] = useState('')
 
   useEffect(() => {
     Promise.all([api.getModels(), api.getSessions()])
       .then(([modelList, sessionList]) => {
         setModels(modelList)
         setSessions(sessionList)
-        if (modelList.length > 0) setSelectedModel(modelList[0].id)
+        const available = modelList.find((m) => m.available)
+        if (available) setSelectedModel(available.id)
+        else if (modelList.length > 0) setSelectedModel(modelList[0].id)
         if (sessionList.length > 0) setActiveSessionId(sessionList[0].id)
       })
       .catch(console.error)
@@ -58,6 +63,8 @@ function ChatApp({ user, onLogout }) {
     )
   }
 
+  const chatOptions = () => ({ useSwarm, attachments })
+
   const handleSendStream = async (sessionId, text, assistantId) => {
     let fullContent = ''
     let toolCalls = []
@@ -76,11 +83,24 @@ function ChatApp({ user, onLogout }) {
         updateAssistant(assistantId, { activeTools: [...activeTools], tool_calls_made: [...toolCalls] })
       } else if (event === 'thinking') {
         updateAssistant(assistantId, { content: fullContent || `Thinking (step ${data.iteration})...` })
+      } else if (event === 'validating') {
+        updateAssistant(assistantId, { content: fullContent + '\n\n*Validating answer...*' })
+      } else if (event === 'replace') {
+        fullContent = data.content || fullContent
+        updateAssistant(assistantId, { content: fullContent })
+      } else if (event === 'validation') {
+        updateAssistant(assistantId, { validation: data })
+      } else if (event === 'warning') {
+        updateAssistant(assistantId, { content: fullContent + `\n\n*${data.message}*` })
       } else if (event === 'done') {
         toolCalls = data.tool_calls_made || toolCalls
         fullContent = data.content || fullContent
+        updateAssistant(assistantId, {
+          agents_used: data.agents_used,
+          validation: data.validation,
+        })
       }
-    })
+    }, chatOptions())
 
     updateAssistant(assistantId, {
       content: fullContent,
@@ -91,17 +111,19 @@ function ChatApp({ user, onLogout }) {
   }
 
   const handleSendSync = async (sessionId, text, assistantId) => {
-    const result = await api.chat(sessionId, text, selectedModel)
+    const result = await api.chat(sessionId, text, selectedModel, chatOptions())
     updateAssistant(assistantId, {
       content: result.response,
       tool_calls_made: result.tool_calls_made,
+      agents_used: result.agents_used,
+      validation: result.validation,
       streaming: false,
     })
   }
 
   const handleSendAsync = async (sessionId, text, assistantId) => {
     updateAssistant(assistantId, { content: 'Processing in background (Celery)...' })
-    const { task_id } = await api.chatAsync(sessionId, text, selectedModel)
+    const { task_id } = await api.chatAsync(sessionId, text, selectedModel, chatOptions())
 
     let status = 'PENDING'
     for (let i = 0; i < 120 && status === 'PENDING'; i++) {
@@ -149,9 +171,10 @@ function ChatApp({ user, onLogout }) {
     ])
 
     try {
-      if (chatMode === 'stream') {
+      const effectiveMode = useSwarm && chatMode === 'stream' ? 'sync' : chatMode
+      if (effectiveMode === 'stream') {
         await handleSendStream(sessionId, text, assistantId)
-      } else if (chatMode === 'async') {
+      } else if (effectiveMode === 'async') {
         await handleSendAsync(sessionId, text, assistantId)
       } else {
         await handleSendSync(sessionId, text, assistantId)
@@ -171,7 +194,20 @@ function ChatApp({ user, onLogout }) {
     } finally {
       setLoading(false)
     }
-  }, [activeSessionId, selectedModel, chatMode])
+  }, [activeSessionId, selectedModel, chatMode, useSwarm, attachments])
+
+  const handleUpload = async (files) => {
+    setUploadStatus('Uploading...')
+    try {
+      const result = await api.uploadFiles(files)
+      setAttachments((prev) => [...prev, ...result.files])
+      const indexed = result.indexed?.filter((i) => !i.error).length || 0
+      setUploadStatus(indexed ? `Indexed ${indexed} document(s) for RAG` : `Uploaded ${result.count} file(s)`)
+      setTimeout(() => setUploadStatus(''), 4000)
+    } catch (err) {
+      setUploadStatus(`Upload failed: ${err.message}`)
+    }
+  }
 
   const handleDeleteSession = async (sessionId) => {
     try {
@@ -217,6 +253,11 @@ function ChatApp({ user, onLogout }) {
           onSend={handleSend}
           loading={loading}
           hasSession={!!activeSessionId}
+          useSwarm={useSwarm}
+          onSwarmChange={setUseSwarm}
+          attachments={attachments}
+          onUpload={handleUpload}
+          uploadStatus={uploadStatus}
         />
       </div>
     </div>
@@ -248,15 +289,18 @@ export default function App() {
     return <div className="loading-screen">Loading...</div>
   }
 
-  if (!user) {
-    return <AuthPage onAuth={setUser} />
-  }
-
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<ChatApp user={user} onLogout={handleLogout} />} />
-        <Route path="/test" element={<TestDashboard />} />
+        <Route path="/auth/callback" element={<AuthCallback onAuth={setUser} />} />
+        {!user ? (
+          <Route path="*" element={<AuthPage onAuth={setUser} />} />
+        ) : (
+          <>
+            <Route path="/" element={<ChatApp user={user} onLogout={handleLogout} />} />
+            <Route path="/test" element={<TestDashboard />} />
+          </>
+        )}
       </Routes>
     </BrowserRouter>
   )

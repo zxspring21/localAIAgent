@@ -1,0 +1,30 @@
+{
+  "cli": {
+    "version": ">= 14.0.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal"
+    },
+    "preview": {
+      "distribution": "internal"
+    },
+    "production": {
+      "autoIncrement": true
+    }
+  },
+  "submit": {
+    "production": {
+      "ios": {
+        "appleId": "you@example.com",
+        "ascAppId": "REPLACE_APP_STORE_CONNECT_ID",
+        "appleTeamId": "REPLACE_TEAM_ID"
+      },
+      "android": {
+        "track": "internal"
+      }
+    }
+  }
+}

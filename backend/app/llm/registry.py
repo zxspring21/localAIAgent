@@ -60,6 +60,8 @@ MODEL_ALIASES: dict[str, str] = {
     "meta-llama/Llama-3.1-8B-Instruct": "mlx-llama-3.1-8b",
     "meta-llama/Meta-Llama-3-8B-Instruct": "mlx-llama-3.2-3b",
     "meta-llama/Llama-3.2-3B-Instruct": "mlx-llama-3.2-3b",
+    "mlx-community/Llama-3.2-3B-Instruct-4bit": "mlx-llama-3.2-3b",
+    "mlx-community/Meta-Llama-3.1-8B-Instruct-4bit": "mlx-llama-3.1-8b",
     "default_model": "mlx-llama-3.2-3b",
 }
 
@@ -194,6 +196,11 @@ _CATALOG_BY_ID = {m.id: m for m in MODEL_CATALOG}
 
 def resolve_model(model_id: str) -> ModelSpec:
     """Map UI / legacy ids to a catalog entry."""
+    from app.config import settings
+
+    if not model_id:
+        model_id = settings.llm_default_model
+
     canonical = MODEL_ALIASES.get(model_id, model_id)
     if canonical in _CATALOG_BY_ID:
         return _CATALOG_BY_ID[canonical]

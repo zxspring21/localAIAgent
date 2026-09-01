@@ -65,6 +65,44 @@
   border-top: 1px solid var(--border);
 }
 
+.feature-bar {
+  max-width: 768px;
+  margin: 0 auto 8px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.feature-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.feature-btn {
+  padding: 4px 10px;
+  font-size: 0.8125rem;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+}
+
+.feature-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.attachment-count,
+.upload-status {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
 .input-form {
   max-width: 768px;
   margin: 0 auto;

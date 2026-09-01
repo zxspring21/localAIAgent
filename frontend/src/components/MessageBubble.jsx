@@ -1,7 +1,7 @@
 import ReactMarkdown from 'react-markdown'
 import './MessageBubble.css'
 
-export default function MessageBubble({ role, content, toolCalls, activeTools, streaming }) {
+export default function MessageBubble({ role, content, toolCalls, agentsUsed, validation, activeTools, streaming }) {
   const isUser = role === 'user'
 
   return (
@@ -27,6 +27,22 @@ export default function MessageBubble({ role, content, toolCalls, activeTools, s
             <span className="streaming-placeholder">Thinking...</span>
           ) : null}
         </div>
+        {agentsUsed && agentsUsed.length > 0 && (
+          <div className="tool-calls">
+            <span className="tool-label">Agents:</span>
+            {agentsUsed.map((a, i) => (
+              <span key={i} className="tool-badge">{a}</span>
+            ))}
+          </div>
+        )}
+        {validation?.issues?.length > 0 && (
+          <div className="tool-calls validation">
+            <span className="tool-label">Validated:</span>
+            {validation.sources_used?.map((s, i) => (
+              <span key={i} className="tool-badge">{s}</span>
+            ))}
+          </div>
+        )}
         {toolCalls && toolCalls.length > 0 && (
           <div className="tool-calls">
             <span className="tool-label">Tools used:</span>

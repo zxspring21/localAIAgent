@@ -1,4 +1,15 @@
+import { useMemo } from 'react'
 import './Sidebar.css'
+
+function groupModels(models) {
+  const groups = {}
+  for (const m of models) {
+    const key = m.provider || 'Other'
+    if (!groups[key]) groups[key] = []
+    groups[key].push(m)
+  }
+  return groups
+}
 
 export default function Sidebar({
   sessions,
@@ -12,6 +23,9 @@ export default function Sidebar({
   user,
   onLogout,
 }) {
+  const grouped = useMemo(() => groupModels(models), [models])
+  const selected = models.find((m) => m.id === selectedModel)
+
   return (
     <aside className="sidebar">
       <div className="sidebar-header">
@@ -26,10 +40,19 @@ export default function Sidebar({
       <div className="model-selector">
         <label>Model</label>
         <select value={selectedModel} onChange={(e) => onModelChange(e.target.value)}>
-          {models.map((m) => (
-            <option key={m.id} value={m.id}>{m.name}</option>
+          {Object.entries(grouped).map(([provider, items]) => (
+            <optgroup key={provider} label={provider}>
+              {items.map((m) => (
+                <option key={m.id} value={m.id} disabled={!m.available}>
+                  {m.name}{m.tier === 'paid' ? ' · paid' : ''}{!m.available ? ' (unavailable)' : ''}
+                </option>
+              ))}
+            </optgroup>
           ))}
         </select>
+        {selected?.description && (
+          <p className="model-hint">{selected.description}</p>
+        )}
       </div>
 
       <div className="session-list">

@@ -30,9 +30,13 @@ class Settings(BaseSettings):
     qdrant_host: str = "localhost"
     qdrant_port: int = 6333
     qdrant_collection: str = "user_memory"
+    qdrant_rag_collection: str = "user_documents"
 
     embedding_base_url: str = "http://localhost:8000/v1"
     embedding_model: str = "text-embedding-3-small"
+
+    rag_enabled: bool = True
+    rag_retrieval_limit: int = 5
 
     jwt_secret_key: str = "change-me-jwt"
     jwt_algorithm: str = "HS256"
@@ -64,10 +68,30 @@ class Settings(BaseSettings):
     mcp_slack_url: str = ""
     mcp_notion_url: str = ""
     mcp_gmail_url: str = ""
+    mcp_facebook_url: str = ""
 
     max_cot_iterations: int = 10
     max_swarm_agents: int = 3
     frontend_url: str = "http://localhost:3000"
+    api_public_url: str = "http://localhost:8080"
+
+    # OAuth (web + future iOS/Android)
+    google_oauth_client_id: str = ""
+    google_oauth_client_secret: str = ""
+    apple_oauth_client_id: str = ""
+
+    sandbox_enabled: bool = True
+
+    # Generation quality (fixes MLX repetition loops)
+    llm_repetition_penalty: float = 1.15
+    llm_repetition_context_size: int = 40
+    llm_frequency_penalty: float = 0.3
+    llm_presence_penalty: float = 0.2
+    llm_temperature: float = 0.7
+
+    # Answer validation orchestration
+    answer_validation_enabled: bool = True
+    validation_use_web_search: bool = True
 
     def model_post_init(self, __context) -> None:
         import os
@@ -101,6 +125,15 @@ class Settings(BaseSettings):
         # mlx-lm basic server has no OpenAI tool-calling API
         if self.llm_backend == "mlx" and os.getenv("LLM_ENABLE_TOOLS") is None:
             object.__setattr__(self, "llm_enable_tools", False)
+
+        # Normalize default model to catalog id (handles legacy HF / mlx-community ids)
+        try:
+            from app.llm.registry import resolve_model
+
+            resolved = resolve_model(self.llm_default_model)
+            object.__setattr__(self, "llm_default_model", resolved.id)
+        except Exception:
+            pass
 
     @property
     def use_tool_calling(self) -> bool:

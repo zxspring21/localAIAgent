@@ -4,6 +4,8 @@ CREATE TABLE IF NOT EXISTS users (
     username VARCHAR(64) UNIQUE NOT NULL,
     email VARCHAR(255) UNIQUE,
     password_hash VARCHAR(255) NOT NULL,
+    auth_provider VARCHAR(32) DEFAULT 'email',
+    oauth_sub VARCHAR(255),
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -50,3 +52,18 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_user_id ON scheduled_tasks(user_id);
+
+-- RAG documents metadata
+CREATE TABLE IF NOT EXISTS documents (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    filename VARCHAR(512) NOT NULL,
+    file_path TEXT NOT NULL,
+    chunk_count INTEGER DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_documents_user_id ON documents(user_id);
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(32) DEFAULT 'email';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS oauth_sub VARCHAR(255);
