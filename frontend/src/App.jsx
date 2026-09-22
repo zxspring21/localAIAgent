@@ -5,14 +5,26 @@ import AuthCallback from './components/AuthCallback'
 import AuthPage from './components/AuthPage'
 import Sidebar from './components/Sidebar'
 import ChatArea from './components/ChatArea'
+import ArtifactPanel from './components/ArtifactPanel'
 import TestDashboard from './components/TestDashboard'
+import { extractArtifacts } from './lib/artifacts'
 import './styles/App.css'
 
 const CHAT_MODES = [
-  { id: 'stream', label: 'SSE Stream' },
+  { id: 'stream', label: 'Stream' },
   { id: 'sync', label: 'Sync' },
-  { id: 'async', label: 'Celery Async' },
+  { id: 'async', label: 'Async' },
 ]
+
+const emptySwarm = () => ({ active: false, nodes: [] })
+
+function upsertNode(nodes, patch) {
+  const i = nodes.findIndex((n) => n.id === patch.id)
+  if (i === -1) return [...nodes, patch]
+  const next = nodes.slice()
+  next[i] = { ...next[i], ...patch }
+  return next
+}
 
 function ChatApp({ user, onLogout }) {
   const [sessions, setSessions] = useState([])
@@ -25,6 +37,11 @@ function ChatApp({ user, onLogout }) {
   const [useSwarm, setUseSwarm] = useState(false)
   const [attachments, setAttachments] = useState([])
   const [uploadStatus, setUploadStatus] = useState('')
+  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [swarm, setSwarm] = useState(emptySwarm)
+  const [artifact, setArtifact] = useState(null)
+  const [artifactTab, setArtifactTab] = useState('preview')
+  const [artifactExpanded, setArtifactExpanded] = useState(false)
 
   useEffect(() => {
     Promise.all([api.getModels(), api.getSessions()])
@@ -49,19 +66,32 @@ function ChatApp({ user, onLogout }) {
 
   const handleNewChat = useCallback(async () => {
     try {
-      const session = await api.createSession('New Chat', selectedModel)
+      const session = await api.createSession('New chat', selectedModel)
       setSessions((prev) => [session, ...prev])
       setActiveSessionId(session.id)
       setMessages([])
+      setSwarm(emptySwarm())
+      setArtifact(null)
     } catch (err) {
       console.error(err)
     }
   }, [selectedModel])
 
   const updateAssistant = (assistantId, patch) => {
-    setMessages((prev) =>
-      prev.map((m) => (m.id === assistantId ? { ...m, ...patch } : m))
-    )
+    setMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, ...patch } : m)))
+  }
+
+  const openArtifact = (art) => {
+    setArtifact(art)
+    setArtifactTab(art.previewable ? 'preview' : 'source')
+    setArtifactExpanded(false)
+  }
+
+  const maybeOpenArtifacts = (text) => {
+    const arts = extractArtifacts(text)
+    const html = arts.find((a) => a.previewable)
+    if (html) openArtifact(html)
+    else if (arts[0]) openArtifact(arts[0])
   }
 
   const chatOptions = () => ({ useSwarm, attachments })
@@ -83,9 +113,9 @@ function ChatApp({ user, onLogout }) {
         toolCalls = [...toolCalls, data.name]
         updateAssistant(assistantId, { activeTools: [...activeTools], tool_calls_made: [...toolCalls] })
       } else if (event === 'thinking') {
-        updateAssistant(assistantId, { content: fullContent || `Thinking (step ${data.iteration})...` })
+        updateAssistant(assistantId, { content: fullContent || `Thinking (step ${data.iteration})…` })
       } else if (event === 'validating') {
-        updateAssistant(assistantId, { content: fullContent + '\n\n*Validating answer...*' })
+        updateAssistant(assistantId, { content: fullContent || 'Checking the answer…' })
       } else if (event === 'replace') {
         fullContent = data.content || fullContent
         updateAssistant(assistantId, { content: fullContent })
@@ -93,13 +123,46 @@ function ChatApp({ user, onLogout }) {
         updateAssistant(assistantId, { validation: data })
       } else if (event === 'warning') {
         updateAssistant(assistantId, { content: fullContent + `\n\n*${data.message}*` })
+      } else if (event === 'swarm_start') {
+        setSwarm({
+          active: true,
+          nodes: [{ id: 'planner', agent: 'planner', status: 'pending', task: 'Planning' }],
+        })
+      } else if (event === 'swarm_plan') {
+        const extras = (data.subtasks || []).map((s) => ({
+          id: s.id,
+          agent: s.agent,
+          task: s.task,
+          status: 'pending',
+        }))
+        setSwarm((prev) => ({
+          active: true,
+          nodes: [
+            ...upsertNode(prev.nodes, { id: 'planner', agent: 'planner', status: 'done', preview: data.preview }),
+            ...extras,
+            { id: 'synthesizer', agent: 'synthesizer', status: 'pending', task: 'Merge results' },
+          ],
+        }))
+      } else if (event === 'swarm_agent_start') {
+        setSwarm((prev) => ({
+          active: true,
+          nodes: upsertNode(prev.nodes, { ...data, status: 'running' }),
+        }))
+      } else if (event === 'swarm_agent_done') {
+        setSwarm((prev) => ({
+          active: true,
+          nodes: upsertNode(prev.nodes, { ...data, status: 'done' }),
+        }))
       } else if (event === 'done') {
         toolCalls = data.tool_calls_made || toolCalls
         fullContent = data.content || fullContent
         updateAssistant(assistantId, {
           agents_used: data.agents_used,
           validation: data.validation,
+          content: fullContent,
         })
+        setSwarm((prev) => ({ ...prev, active: false }))
+        maybeOpenArtifacts(fullContent)
       }
     }, chatOptions())
 
@@ -120,28 +183,28 @@ function ChatApp({ user, onLogout }) {
       validation: result.validation,
       streaming: false,
     })
+    maybeOpenArtifacts(result.response)
   }
 
   const handleSendAsync = async (sessionId, text, assistantId) => {
-    updateAssistant(assistantId, { content: 'Processing in background (Celery)...' })
+    updateAssistant(assistantId, { content: 'Working in the background…' })
     const { task_id } = await api.chatAsync(sessionId, text, selectedModel, chatOptions())
-
     let status = 'PENDING'
     for (let i = 0; i < 120 && status === 'PENDING'; i++) {
       await new Promise((r) => setTimeout(r, 2000))
       const result = await api.getAsyncTaskStatus(task_id)
       status = result.status
       if (status === 'SUCCESS') {
+        const content = result.result?.content || '(empty response)'
         updateAssistant(assistantId, {
-          content: result.result?.content || '(empty response)',
+          content,
           tool_calls_made: result.result?.tool_calls_made || [],
           streaming: false,
         })
+        maybeOpenArtifacts(content)
         return
       }
-      if (status === 'FAILURE') {
-        throw new Error(result.error || 'Async task failed')
-      }
+      if (status === 'FAILURE') throw new Error(result.error || 'Async task failed')
     }
     throw new Error('Async task timed out')
   }
@@ -164,7 +227,6 @@ function ChatApp({ user, onLogout }) {
     const userMsg = { role: 'user', content: text, id: Date.now() }
     setMessages((prev) => [...prev, userMsg])
     setLoading(true)
-
     const assistantId = Date.now() + 1
     setMessages((prev) => [
       ...prev,
@@ -172,38 +234,33 @@ function ChatApp({ user, onLogout }) {
     ])
 
     try {
-      const effectiveMode = useSwarm && chatMode === 'stream' ? 'sync' : chatMode
-      if (effectiveMode === 'stream') {
-        await handleSendStream(sessionId, text, assistantId)
-      } else if (effectiveMode === 'async') {
+      if (chatMode === 'async') {
         await handleSendAsync(sessionId, text, assistantId)
-      } else {
+      } else if (chatMode === 'sync' && !useSwarm) {
         await handleSendSync(sessionId, text, assistantId)
+      } else {
+        await handleSendStream(sessionId, text, assistantId)
       }
 
       setSessions((prev) =>
-        prev.map((s) =>
-          s.id === sessionId ? { ...s, title: text.slice(0, 80), updated_at: new Date().toISOString() } : s
-        ).sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))
+        prev
+          .map((s) => (s.id === sessionId ? { ...s, title: text.slice(0, 80), updated_at: new Date().toISOString() } : s))
+          .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))
       )
     } catch (err) {
-      updateAssistant(assistantId, {
-        content: `Error: ${err.message}`,
-        streaming: false,
-        activeTools: [],
-      })
+      updateAssistant(assistantId, { content: `Error: ${err.message}`, streaming: false, activeTools: [] })
     } finally {
       setLoading(false)
     }
   }, [activeSessionId, selectedModel, chatMode, useSwarm, attachments])
 
   const handleUpload = async (files) => {
-    setUploadStatus('Uploading...')
+    setUploadStatus('Uploading…')
     try {
       const result = await api.uploadFiles(files)
       setAttachments((prev) => [...prev, ...result.files])
       const indexed = result.indexed?.filter((i) => !i.error).length || 0
-      setUploadStatus(indexed ? `Indexed ${indexed} document(s) for RAG` : `Uploaded ${result.count} file(s)`)
+      setUploadStatus(indexed ? `Indexed ${indexed} document(s)` : `Uploaded ${result.count} file(s)`)
       setTimeout(() => setUploadStatus(''), 4000)
     } catch (err) {
       setUploadStatus(`Upload failed: ${err.message}`)
@@ -223,43 +280,68 @@ function ChatApp({ user, onLogout }) {
     }
   }
 
+  const onOpenSwarmNode = (node) => {
+    if (!node?.preview) return
+    openArtifact({
+      id: node.id,
+      lang: 'text',
+      code: node.preview,
+      title: node.agent,
+      previewable: false,
+    })
+  }
+
   return (
-    <div className="app-layout">
+    <div className={`app-layout ${sidebarOpen ? '' : 'sidebar-collapsed'}`}>
       <Sidebar
         sessions={sessions}
         activeSessionId={activeSessionId}
         onSelectSession={setActiveSessionId}
         onNewChat={handleNewChat}
         onDeleteSession={handleDeleteSession}
-        models={models}
-        selectedModel={selectedModel}
-        onModelChange={setSelectedModel}
         user={user}
         onLogout={onLogout}
       />
-      <div className="main-content">
-        <div className="top-bar">
-          <Link to="/test" className="test-link">System Tests</Link>
-          <label className="stream-toggle">
-            Chat mode:
-            <select value={chatMode} onChange={(e) => setChatMode(e.target.value)}>
-              {CHAT_MODES.map((m) => (
-                <option key={m.id} value={m.id}>{m.label}</option>
-              ))}
-            </select>
-          </label>
+      <div className="workspace">
+        <div className="main-content">
+          <div className="top-bar">
+            <button className="icon-btn" type="button" onClick={() => setSidebarOpen((v) => !v)} aria-label="Toggle sidebar">
+              ☰
+            </button>
+            <div className="top-tools">
+              <Link to="/test" className="quiet-link">Tests</Link>
+              <select className="mode-select" value={chatMode} onChange={(e) => setChatMode(e.target.value)}>
+                {CHAT_MODES.map((m) => (
+                  <option key={m.id} value={m.id}>{m.label}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <ChatArea
+            messages={messages}
+            onSend={handleSend}
+            loading={loading}
+            hasSession={!!activeSessionId}
+            useSwarm={useSwarm}
+            onSwarmChange={setUseSwarm}
+            attachments={attachments}
+            onUpload={handleUpload}
+            uploadStatus={uploadStatus}
+            swarm={swarm}
+            onOpenArtifact={openArtifact}
+            onOpenSwarmNode={onOpenSwarmNode}
+          />
         </div>
-        <ChatArea
-          messages={messages}
-          onSend={handleSend}
-          loading={loading}
-          hasSession={!!activeSessionId}
-          useSwarm={useSwarm}
-          onSwarmChange={setUseSwarm}
-          attachments={attachments}
-          onUpload={handleUpload}
-          uploadStatus={uploadStatus}
-        />
+        {artifact && (
+          <ArtifactPanel
+            artifact={artifact}
+            tab={artifactTab}
+            onTab={setArtifactTab}
+            expanded={artifactExpanded}
+            onExpand={() => setArtifactExpanded((v) => !v)}
+            onClose={() => { setArtifact(null); setArtifactExpanded(false) }}
+          />
+        )}
       </div>
     </div>
   )
@@ -287,7 +369,7 @@ export default function App() {
   }
 
   if (initializing) {
-    return <div className="loading-screen">Loading...</div>
+    return <div className="loading-screen">Loading…</div>
   }
 
   return (

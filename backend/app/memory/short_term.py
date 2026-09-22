@@ -51,6 +51,38 @@ class ShortTermMemory:
         except Exception:
             return []
 
+    async def inspect(self, session_id: str | None = None) -> dict[str, Any]:
+        if not self._available or not self._redis:
+            try:
+                await self.connect()
+            except Exception as e:
+                return {"ok": False, "error": str(e), "keys": []}
+        info = {"ok": True, "url": settings.redis_url, "keys": []}
+        try:
+            keys = []
+            async for key in self._redis.scan_iter(match="session:*:history", count=50):
+                keys.append(key)
+                if len(keys) >= 40:
+                    break
+            preview = []
+            for key in keys[:20]:
+                n = await self._redis.llen(key)
+                ttl = await self._redis.ttl(key)
+                preview.append({"key": key, "messages": n, "ttl": ttl})
+            info["keys"] = preview
+            info["key_count"] = len(keys)
+            if session_id:
+                hist = await self.get_history(session_id)
+                info["active_session"] = {
+                    "id": session_id,
+                    "messages": len(hist),
+                    "preview": [{"role": m.get("role"), "content": str(m.get("content") or "")[:160]} for m in hist[-6:]],
+                }
+        except Exception as e:
+            info["ok"] = False
+            info["error"] = str(e)
+        return info
+
     async def clear(self, session_id: str):
         if not self._available or not self._redis:
             return

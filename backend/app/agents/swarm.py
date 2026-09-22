@@ -1,8 +1,12 @@
 """Multi-agent swarm: planner → sub-agents → synthesizer."""
 
+from __future__ import annotations
+
 import json
 import logging
 import uuid
+from collections.abc import AsyncGenerator
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,21 +29,46 @@ async def run_swarm(
     model_id: str,
     user_input: str,
 ) -> SwarmResult:
+    result: SwarmResult | None = None
     async with agent_run_sandbox(user_id, session_id, "swarm"):
-        return await _run_swarm_body(db, user_id, session_id, model_id, user_input)
+        async for event in _iter_swarm(db, user_id, session_id, model_id, user_input):
+            if event["event"] == "done":
+                data = event["data"]
+                result = SwarmResult(
+                    content=data.get("content", ""),
+                    model_name=data.get("model", model_id),
+                    agents_used=data.get("agents_used") or [],
+                    tool_calls_made=data.get("tool_calls_made") or [],
+                    validation=data.get("validation") or {},
+                )
+    return result or SwarmResult(content="Swarm produced no output.", model_name=model_id)
 
 
-async def _run_swarm_body(
+async def run_swarm_stream(
     db: AsyncSession,
     user_id: uuid.UUID,
     session_id: uuid.UUID,
     model_id: str,
     user_input: str,
-) -> SwarmResult:
+) -> AsyncGenerator[dict[str, Any], None]:
+    async with agent_run_sandbox(user_id, session_id, "swarm"):
+        async for event in _iter_swarm(db, user_id, session_id, model_id, user_input):
+            yield event
+
+
+async def _iter_swarm(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    session_id: uuid.UUID,
+    model_id: str,
+    user_input: str,
+) -> AsyncGenerator[dict[str, Any], None]:
     spec, api_model = validate_model(model_id)
     client = get_llm_client(spec)
     agents_used: list[str] = []
     tool_calls: list[str] = []
+
+    yield {"event": "swarm_start", "data": {"model": spec.id}}
 
     mem_ctx = await memory_manager.build_context(user_id, session_id, user_input)
     memory_block = ""
@@ -48,6 +77,11 @@ async def _run_swarm_body(
     if mem_ctx.rag_chunks:
         rag_text = "\n".join(c.get("content", "")[:400] for c in mem_ctx.rag_chunks[:3])
         memory_block += f"\n\nRelevant documents:\n{rag_text}"
+
+    yield {
+        "event": "swarm_agent_start",
+        "data": {"id": "planner", "agent": "planner", "task": "Break the request into subtasks"},
+    }
 
     plan_resp = await create_chat_completion(
         client,
@@ -81,12 +115,30 @@ async def _run_swarm_body(
     if not subtasks:
         subtasks = [{"agent": "researcher", "task": user_input}]
 
+    yield {
+        "event": "swarm_plan",
+        "data": {
+            "subtasks": [{"id": f"sub-{i}", **sub} for i, sub in enumerate(subtasks)],
+            "preview": plan_text[:1200],
+        },
+    }
+    yield {
+        "event": "swarm_agent_done",
+        "data": {"id": "planner", "agent": "planner", "preview": plan_text[:1200]},
+    }
+
     observations: list[str] = []
-    for sub in subtasks:
+    for i, sub in enumerate(subtasks):
         agent_name = sub.get("agent", "researcher")
         task = sub.get("task", user_input)
+        node_id = f"sub-{i}"
         role = next((r for r in SUB_AGENT_ROLES if r["name"] == agent_name), SUB_AGENT_ROLES[0])
         agents_used.append(agent_name)
+
+        yield {
+            "event": "swarm_agent_start",
+            "data": {"id": node_id, "agent": agent_name, "task": task},
+        }
 
         agent_resp = await create_chat_completion(
             client,
@@ -105,7 +157,7 @@ async def _run_swarm_body(
             for tool in role.get("tools", []):
                 if tool.startswith("mcp_") or tool == "web_search":
                     try:
-                        args = {"query": task[:200]} if tool == "web_search" else {"query": task[:200]}
+                        args = {"query": task[:200]}
                         search_result = execute_skill(tool, args)
                         tool_calls.append(tool)
                         agent_output += f"\n\n[{tool}]\n{search_result[:1500]}"
@@ -118,6 +170,20 @@ async def _run_swarm_body(
                 agent_output += f"\n\n[Web Search Results]\n{search_result[:1500]}"
 
         observations.append(f"### {agent_name.upper()}\nTask: {task}\n\n{agent_output}")
+        yield {
+            "event": "swarm_agent_done",
+            "data": {
+                "id": node_id,
+                "agent": agent_name,
+                "task": task,
+                "preview": agent_output[:4000],
+            },
+        }
+
+    yield {
+        "event": "swarm_agent_start",
+        "data": {"id": "synthesizer", "agent": "synthesizer", "task": "Merge sub-agent results"},
+    }
 
     synth_resp = await create_chat_completion(
         client,
@@ -138,20 +204,27 @@ async def _run_swarm_body(
     )
     final = synth_resp.choices[0].message.content or "No response generated."
     agents_used.append("synthesizer")
+    yield {
+        "event": "swarm_agent_done",
+        "data": {"id": "synthesizer", "agent": "synthesizer", "preview": final[:4000]},
+    }
 
-    validation = await validate_answer(
-        client, api_model, user_input, final, mem_ctx, spec
-    )
+    yield {"event": "validating", "data": {}}
+    validation = await validate_answer(client, api_model, user_input, final, mem_ctx, spec)
     if validation.agents_used:
         agents_used.extend(validation.agents_used)
     final = validation.revised_answer
 
     await memory_manager.save_turn(db, session_id, user_id, user_input, final)
 
-    return SwarmResult(
-        content=final,
-        model_name=spec.id,
-        agents_used=agents_used,
-        tool_calls_made=tool_calls,
-        validation=validation.to_dict(),
-    )
+    yield {"event": "replace", "data": {"content": final}}
+    yield {
+        "event": "done",
+        "data": {
+            "content": final,
+            "model": spec.id,
+            "tool_calls_made": tool_calls,
+            "agents_used": agents_used,
+            "validation": validation.to_dict(),
+        },
+    }

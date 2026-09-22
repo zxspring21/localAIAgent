@@ -3,12 +3,12 @@ import logging
 import uuid
 from collections.abc import AsyncGenerator
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import RedirectResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents.swarm import run_swarm
+from app.agents.swarm import run_swarm, run_swarm_stream
 from app.auth.jwt import authenticate_user, create_access_token, get_current_user, register_user
 from app.auth.oauth import (
     frontend_callback_url,
@@ -350,6 +350,17 @@ async def index_rag_files(
     return {"indexed": indexed, "count": len(indexed)}
 
 
+@router.get("/memory/overview")
+async def memory_overview(
+    session_id: str | None = Query(default=None),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.memory.inspect import memory_overview as snapshot
+
+    return await snapshot(db, current_user.id, session_id)
+
+
 @router.get("/mcp/status")
 async def mcp_status(current_user: User = Depends(get_current_user)):
     from app.mcp.loader import register_mcp_skills
@@ -375,15 +386,25 @@ async def chat_stream(
 
     async def event_generator() -> AsyncGenerator[str, None]:
         try:
-            async for event in brain.process_request_stream(
-                db=db,
-                user_id=current_user.id,
-                session_id=request.session_id,
-                model_name=model_name,
-                user_input=request.message,
-                attachments=request.attachments or None,
-            ):
-                yield _format_sse(event["event"], event["data"])
+            if request.use_swarm:
+                async for event in run_swarm_stream(
+                    db=db,
+                    user_id=current_user.id,
+                    session_id=request.session_id,
+                    model_id=model_name,
+                    user_input=request.message,
+                ):
+                    yield _format_sse(event["event"], event["data"])
+            else:
+                async for event in brain.process_request_stream(
+                    db=db,
+                    user_id=current_user.id,
+                    session_id=request.session_id,
+                    model_name=model_name,
+                    user_input=request.message,
+                    attachments=request.attachments or None,
+                ):
+                    yield _format_sse(event["event"], event["data"])
 
             if request.message:
                 session.title = request.message[:80]

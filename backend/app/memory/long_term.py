@@ -1,61 +1,32 @@
-import hashlib
 import logging
 import uuid
 from typing import Any
 
-from openai import AsyncOpenAI
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, PointStruct, VectorParams
+from qdrant_client.models import FieldCondition, Filter, MatchValue, PointStruct
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.memory.embeddings import VECTOR_SIZE, embed_text
+from app.memory.qdrant_util import ensure_collection
 from app.models.database import Message
 
 logger = logging.getLogger(__name__)
-
-VECTOR_SIZE = 384
 
 
 class LongTermMemory:
     def __init__(self):
         self._qdrant: QdrantClient | None = None
-        self._encoder: AsyncOpenAI | None = None
         self._available = False
 
     def connect(self):
         self._qdrant = QdrantClient(host=settings.qdrant_host, port=settings.qdrant_port)
-        self._encoder = AsyncOpenAI(
-            base_url=settings.embedding_base_url,
-            api_key=settings.llm_api_key,
-        )
-        self._ensure_collection()
+        ensure_collection(self._qdrant, settings.qdrant_collection, VECTOR_SIZE)
         self._available = True
 
-    def _ensure_collection(self):
-        if not self._qdrant:
-            return
-        collections = [c.name for c in self._qdrant.get_collections().collections]
-        if settings.qdrant_collection not in collections:
-            self._qdrant.create_collection(
-                collection_name=settings.qdrant_collection,
-                vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE),
-            )
-
     async def _generate_embedding(self, text: str) -> list[float]:
-        try:
-            response = await self._encoder.embeddings.create(
-                input=[text],
-                model=settings.embedding_model,
-            )
-            return response.data[0].embedding
-        except Exception as e:
-            logger.warning("Embedding API unavailable, using hash fallback: %s", e)
-            return self._hash_embedding(text)
-
-    def _hash_embedding(self, text: str) -> list[float]:
-        digest = hashlib.sha384(text.encode()).digest()
-        return [b / 255.0 for b in digest]
+        return await embed_text(text)
 
     async def save_message(
         self,
@@ -64,6 +35,12 @@ class LongTermMemory:
         user_id: uuid.UUID,
         message: dict[str, Any],
     ) -> uuid.UUID:
+        if not self._qdrant:
+            try:
+                self.connect()
+            except Exception as e:
+                logger.warning("Qdrant unavailable: %s", e)
+
         msg = Message(
             session_id=session_id,
             user_id=user_id,
@@ -75,7 +52,11 @@ class LongTermMemory:
         await db.flush()
 
         try:
+            if not self._qdrant:
+                raise RuntimeError("Qdrant not connected")
             vector = await self._generate_embedding(message["content"])
+            if len(vector) != VECTOR_SIZE:
+                raise ValueError(f"Embedding dim {len(vector)} != {VECTOR_SIZE}")
             point_id = str(msg.id)
             self._qdrant.upsert(
                 collection_name=settings.qdrant_collection,
@@ -88,7 +69,7 @@ class LongTermMemory:
                             "session_id": str(session_id),
                             "user_id": str(user_id),
                             "role": message["role"],
-                            "content": message["content"],
+                            "content": message["content"][:4000],
                         },
                     )
                 ],
@@ -116,9 +97,9 @@ class LongTermMemory:
             results = self._qdrant.search(
                 collection_name=settings.qdrant_collection,
                 query_vector=query_vector,
-                query_filter={
-                    "must": [{"key": "user_id", "match": {"value": str(user_id)}}]
-                },
+                query_filter=Filter(
+                    must=[FieldCondition(key="user_id", match=MatchValue(value=str(user_id)))]
+                ),
                 limit=limit,
             )
             return [
@@ -127,6 +108,7 @@ class LongTermMemory:
                     "role": hit.payload.get("role", ""),
                     "session_id": hit.payload.get("session_id", ""),
                     "score": hit.score,
+                    "source": "long_term",
                 }
                 for hit in results
             ]
@@ -147,6 +129,42 @@ class LongTermMemory:
             .limit(limit)
         )
         return list(reversed(result.scalars().all()))
+
+    async def count_points(self, user_id: uuid.UUID) -> int:
+        if not self._qdrant:
+            try:
+                self.connect()
+            except Exception:
+                return 0
+        res = self._qdrant.count(
+            collection_name=settings.qdrant_collection,
+            count_filter=Filter(must=[FieldCondition(key="user_id", match=MatchValue(value=str(user_id)))]),
+            exact=True,
+        )
+        return int(res.count)
+
+    async def sample_points(self, user_id: uuid.UUID, limit: int = 8) -> list[dict[str, Any]]:
+        if not self._qdrant:
+            try:
+                self.connect()
+            except Exception:
+                return []
+        points, _ = self._qdrant.scroll(
+            collection_name=settings.qdrant_collection,
+            scroll_filter=Filter(must=[FieldCondition(key="user_id", match=MatchValue(value=str(user_id)))]),
+            limit=limit,
+            with_payload=True,
+            with_vectors=False,
+        )
+        return [
+            {
+                "id": str(p.id),
+                "role": (p.payload or {}).get("role"),
+                "session_id": (p.payload or {}).get("session_id"),
+                "content": ((p.payload or {}).get("content") or "")[:240],
+            }
+            for p in points
+        ]
 
 
 lt_memory = LongTermMemory()

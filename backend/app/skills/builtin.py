@@ -132,3 +132,21 @@ def write_file(file_path: str, content: str) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     return f"Successfully wrote {len(content)} bytes to {file_path}"
+
+
+@skill(
+    name="load_skill",
+    description=(
+        "Load full Claude/Anthropic skill instructions by name "
+        "(e.g. frontend-design, web-artifacts-builder, skill-creator, pdf, docx). "
+        "Call this before doing work that matches a catalog skill."
+    ),
+)
+def load_skill(name: str) -> str:
+    from app.runtime.plugins import get_skill_doc, list_plugins
+
+    doc = get_skill_doc(name)
+    if doc:
+        return doc
+    available = ", ".join(p["name"] for p in list_plugins())
+    return f"Unknown skill '{name}'. Available: {available}"

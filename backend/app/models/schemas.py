@@ -1,13 +1,22 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 class UserRegister(BaseModel):
     username: str = Field(min_length=3, max_length=64)
     email: EmailStr | None = None
     password: str = Field(min_length=6)
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def empty_email_to_none(cls, value):
+        if value is None:
+            return None
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
 
 class UserLogin(BaseModel):
@@ -33,11 +42,16 @@ class TokenResponse(BaseModel):
 class UserResponse(BaseModel):
     id: uuid.UUID
     username: str
-    email: str | None
+    email: str | None = None
     created_at: datetime
     auth_provider: str = "email"
 
     model_config = {"from_attributes": True}
+
+    @field_validator("auth_provider", mode="before")
+    @classmethod
+    def default_auth_provider(cls, value):
+        return value or "email"
 
 
 class SessionCreate(BaseModel):

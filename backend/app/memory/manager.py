@@ -57,6 +57,46 @@ class MemoryManager:
                 ctx.rag_chunks = await rag_store.retrieve(user_id, query)
             except Exception as e:
                 logger.warning("RAG retrieve failed: %s", e)
+        return self._fit_context(ctx)
+
+    def _fit_context(self, ctx: MemoryContext) -> MemoryContext:
+        """Keep prompt sections inside a character budget (small MLX windows)."""
+        budget = settings.memory_context_char_budget
+        st_cap = settings.st_history_max_chars
+        rag_cap = settings.rag_chunk_max_chars
+
+        trimmed_st: list[dict[str, Any]] = []
+        used = 0
+        for msg in reversed(ctx.st_history):
+            content = str(msg.get("content") or "")
+            if used + len(content) > st_cap and trimmed_st:
+                break
+            if len(content) > 1200:
+                content = content[:1200] + "…"
+            trimmed_st.append({**msg, "content": content})
+            used += len(content)
+        ctx.st_history = list(reversed(trimmed_st))
+
+        for chunk in ctx.rag_chunks:
+            text = str(chunk.get("content") or "")
+            if len(text) > rag_cap:
+                chunk["content"] = text[:rag_cap] + "…"
+        for mem in ctx.lt_memories:
+            text = str(mem.get("content") or "")
+            if len(text) > rag_cap:
+                mem["content"] = text[:rag_cap] + "…"
+
+        sections = ctx.to_system_sections()
+        total = len(sections["lt_memories"]) + len(sections["rag_context"])
+        while total > budget and (ctx.rag_chunks or ctx.lt_memories):
+            if len(ctx.rag_chunks) >= len(ctx.lt_memories) and ctx.rag_chunks:
+                ctx.rag_chunks.pop()
+            elif ctx.lt_memories:
+                ctx.lt_memories.pop()
+            else:
+                break
+            sections = ctx.to_system_sections()
+            total = len(sections["lt_memories"]) + len(sections["rag_context"])
         return ctx
 
     async def save_turn(

@@ -1,0 +1,24 @@
+{
+  "source": "https://github.com/anthropics/skills/tree/main/skills",
+  "skills": [
+    {"name": "academy-guide", "description": "Guide for using Claude Academy-style structured learning content."},
+    {"name": "algorithmic-art", "description": "Create generative algorithmic art and visual systems from code."},
+    {"name": "brand-guidelines", "description": "Apply consistent brand colors, type, and voice to artifacts."},
+    {"name": "canvas-design", "description": "Create visual art as PNG/PDF from a design philosophy; posters and static pieces."},
+    {"name": "claude-api", "description": "Build against the Claude API with recommended patterns and SDK usage."},
+    {"name": "discernment-nudge", "description": "Prompt for careful judgment when claims are uncertain or high-stakes."},
+    {"name": "doc-coauthoring", "description": "Co-author long-form documents with iterative structure and review."},
+    {"name": "docx", "description": "Create and edit Microsoft Word .docx files."},
+    {"name": "frontend-design", "description": "Distinctive UI design: palette, type, layout that avoids generic AI-template looks."},
+    {"name": "internal-comms", "description": "Write internal memos, updates, and company communications."},
+    {"name": "mcp-builder", "description": "Design and implement Model Context Protocol servers and tools."},
+    {"name": "pdf", "description": "Create and manipulate PDF documents."},
+    {"name": "pptx", "description": "Create PowerPoint presentations."},
+    {"name": "skill-creator", "description": "Author new Claude skills (SKILL.md, scripts, progressive disclosure)."},
+    {"name": "slack-gif-creator", "description": "Create animated GIFs suitable for Slack."},
+    {"name": "theme-factory", "description": "Generate cohesive visual themes and design tokens."},
+    {"name": "web-artifacts-builder", "description": "Build multi-component HTML artifacts (React, Tailwind, shadcn) for Preview/Source."},
+    {"name": "webapp-testing", "description": "Test web apps with browser automation and structured checks."},
+    {"name": "xlsx", "description": "Create and analyze Excel spreadsheets."}
+  ]
+}

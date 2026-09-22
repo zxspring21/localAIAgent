@@ -77,6 +77,10 @@ class ApiClient {
     })
   }
 
+  getPlugins() {
+    return this.request('/runtime/plugins')
+  }
+
   getModels() {
     return this.request('/models')
   }

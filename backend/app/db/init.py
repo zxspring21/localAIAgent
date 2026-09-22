@@ -13,6 +13,7 @@ async def init_database() -> None:
         await conn.run_sync(Base.metadata.create_all)
         await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(32) DEFAULT 'email'"))
         await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS oauth_sub VARCHAR(255)"))
+        await conn.execute(text("UPDATE users SET auth_provider = 'email' WHERE auth_provider IS NULL"))
     logger.info("Database schema ready.")
 
 

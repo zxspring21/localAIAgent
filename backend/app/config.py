@@ -37,6 +37,9 @@ class Settings(BaseSettings):
 
     rag_enabled: bool = True
     rag_retrieval_limit: int = 5
+    memory_context_char_budget: int = 8000
+    st_history_max_chars: int = 4000
+    rag_chunk_max_chars: int = 500
 
     jwt_secret_key: str = "change-me-jwt"
     jwt_algorithm: str = "HS256"
