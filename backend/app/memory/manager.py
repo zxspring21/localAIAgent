@@ -117,6 +117,13 @@ class MemoryManager:
         except Exception as e:
             logger.error("LT save failed: %s", e)
 
+    async def forget_session(self, session_id: uuid.UUID) -> None:
+        await st_memory.clear(str(session_id))
+        await lt_memory.forget_session(session_id)
+
+    async def forget_document(self, db: AsyncSession, user_id: uuid.UUID, document_id: uuid.UUID) -> bool:
+        return await rag_store.delete_document(db, user_id, document_id)
+
     async def index_uploaded_files(
         self,
         db: AsyncSession,

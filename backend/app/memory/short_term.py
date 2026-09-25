@@ -39,6 +39,8 @@ class ShortTermMemory:
         key = self._key(session_id)
         await self._redis.lpush(key, json.dumps(message, ensure_ascii=False))
         await self._redis.ltrim(key, 0, settings.st_memory_max_messages - 1)
+        if settings.st_memory_ttl_seconds > 0:
+            await self._redis.expire(key, settings.st_memory_ttl_seconds)
 
     async def get_history(self, session_id: str) -> list[dict[str, Any]]:
         if not self._available or not self._redis:

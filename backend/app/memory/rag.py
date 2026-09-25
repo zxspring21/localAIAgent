@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from qdrant_client import QdrantClient
-from qdrant_client.models import FieldCondition, Filter, MatchValue, PointStruct
+from qdrant_client.models import FieldCondition, Filter, FilterSelector, MatchValue, PointStruct
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -192,6 +192,48 @@ class RAGStore:
             }
             for p in points
         ]
+
+    async def delete_document(self, db: AsyncSession, user_id: uuid.UUID, document_id: uuid.UUID) -> bool:
+        """Remove PG metadata and all Qdrant chunks for one upload (user-scoped)."""
+        result = await db.execute(
+            select(Document).where(Document.id == document_id, Document.user_id == user_id)
+        )
+        doc = result.scalar_one_or_none()
+        if not doc:
+            return False
+        if not self._qdrant:
+            try:
+                self.connect()
+            except Exception:
+                pass
+        if self._qdrant:
+            self._qdrant.delete(
+                collection_name=self._collection,
+                points_selector=FilterSelector(
+                    filter=Filter(
+                        must=[
+                            FieldCondition(key="document_id", match=MatchValue(value=str(document_id))),
+                            FieldCondition(key="user_id", match=MatchValue(value=str(user_id))),
+                        ]
+                    )
+                ),
+            )
+        await db.delete(doc)
+        await db.commit()
+        return True
+
+    async def forget_user(self, user_id: uuid.UUID) -> None:
+        if not self._qdrant:
+            try:
+                self.connect()
+            except Exception:
+                return
+        self._qdrant.delete(
+            collection_name=self._collection,
+            points_selector=FilterSelector(
+                filter=Filter(must=[FieldCondition(key="user_id", match=MatchValue(value=str(user_id)))])
+            ),
+        )
 
 
 rag_store = RAGStore()

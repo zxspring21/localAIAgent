@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     jwt_expire_minutes: int = 1440
 
     st_memory_max_messages: int = 20
+    st_memory_ttl_seconds: int = 86400
     lt_memory_retrieval_limit: int = 5
 
     celery_broker_url: str = "redis://localhost:6379/1"

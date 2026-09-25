@@ -3,7 +3,7 @@ import uuid
 from typing import Any
 
 from qdrant_client import QdrantClient
-from qdrant_client.models import FieldCondition, Filter, MatchValue, PointStruct
+from qdrant_client.models import FieldCondition, Filter, FilterSelector, MatchValue, PointStruct
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -165,6 +165,25 @@ class LongTermMemory:
             }
             for p in points
         ]
+
+    def _delete_filter(self, conditions: list[FieldCondition]) -> int:
+        if not self._qdrant:
+            try:
+                self.connect()
+            except Exception:
+                return 0
+        self._qdrant.delete(
+            collection_name=settings.qdrant_collection,
+            points_selector=FilterSelector(filter=Filter(must=conditions)),
+        )
+        return 1
+
+    async def forget_session(self, session_id: uuid.UUID) -> None:
+        """Drop semantic points for a chat session (TTL/ltrim already cover Redis ST)."""
+        self._delete_filter([FieldCondition(key="session_id", match=MatchValue(value=str(session_id)))])
+
+    async def forget_user(self, user_id: uuid.UUID) -> None:
+        self._delete_filter([FieldCondition(key="user_id", match=MatchValue(value=str(user_id)))])
 
 
 lt_memory = LongTermMemory()

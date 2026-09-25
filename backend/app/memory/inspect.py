@@ -78,6 +78,7 @@ async def memory_overview(db: AsyncSession, user_id: uuid.UUID, session_id: str 
                 "store": "redis",
                 "purpose": "Short-term rolling window for the current session",
                 "max_messages": settings.st_memory_max_messages,
+                "ttl_seconds": settings.st_memory_ttl_seconds,
             },
             "postgresql": pg,
             "qdrant_long_term": {
@@ -110,6 +111,7 @@ async def memory_overview(db: AsyncSession, user_id: uuid.UUID, session_id: str 
         },
         "context_limits": {
             "st_memory_max_messages": settings.st_memory_max_messages,
+            "st_memory_ttl_seconds": settings.st_memory_ttl_seconds,
             "st_history_max_chars": settings.st_history_max_chars,
             "rag_retrieval_limit": settings.rag_retrieval_limit,
             "lt_memory_retrieval_limit": settings.lt_memory_retrieval_limit,

@@ -91,7 +91,7 @@ Configured servers:
 | Long-term | PostgreSQL + Qdrant | Persistent messages + semantic recall |
 | RAG | PostgreSQL + Qdrant | User-uploaded document chunks |
 
-Unified API: `backend/app/memory/manager.py`
+Unified API: `backend/app/memory/manager.py`. Details: `docs/Memory.md`.
 
 ## Recommended Defaults (Mac M2)
 

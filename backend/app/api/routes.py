@@ -228,6 +228,7 @@ async def delete_session(
         raise HTTPException(status_code=404, detail="Session not found")
 
     await st_memory.clear(str(session_id))
+    await lt_memory.forget_session(session_id)
     await db.delete(session)
     await db.commit()
     return {"status": "deleted"}
@@ -336,6 +337,18 @@ async def list_rag_documents(
         )
         for d in docs
     ]
+
+
+@router.delete("/rag/documents/{document_id}")
+async def delete_rag_document(
+    document_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    ok = await rag_store.delete_document(db, current_user.id, document_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return {"status": "deleted", "document_id": str(document_id)}
 
 
 @router.post("/rag/index")

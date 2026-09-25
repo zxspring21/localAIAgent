@@ -1,353 +1,347 @@
-# LocalAI Agent — System Architecture & Technical Reference
+# LocalAI Agent — System Architecture
 
-## 1. Overview
+Enterprise-shaped **product / inference / training** planes on a codebase that today runs as Vite + Expo + FastAPI + MLX (or cloud APIs). Closed-lab internals (Claude, etc.) are not public; this maps those **design logics** onto this repo.
 
-LocalAI Agent is a multi-client, multi-agent platform: **Vite web**, **Expo iOS/Android**, and a **FastAPI** gateway. It combines:
-
-- **Hermes** observe → think → act loop (works without native tool-calling)
-- **Kimi-style swarm** (planner → researcher/analyst/executor → synthesizer)
-- **Claude-style** skills, hooks, plugins, and per-run sandbox
-- **Online auth**: email register/login, Google, Apple (web + native)
-- **Memory**: Redis short-term, PostgreSQL + Qdrant long-term, RAG documents
-- **Model routing**: MLX local, plus OpenAI / Anthropic / Google / DeepSeek / Moonshot / xAI
-- **SSE streaming** with repetition guards (`repetition_penalty` only via `extra_body`)
+Memory packing, retrieval, and forgetting: **[docs/Memory.md](Memory.md)**.
 
 ---
 
-## 2. System Architecture (Mermaid)
+## 1. Overview
 
-### 2.1 Deployment topology (web + mobile stores)
+- **Product plane:** accounts (email / Google / Apple), sessions, RAG uploads, agent UX, billing-ready JWT gateway.
+- **Inference plane:** model registry + router, SSE, Hermes loop, Kimi-style swarm, sandbox/hooks/plugins, packed memory context.
+- **Training plane (offline, target):** data lake of traces, SFT / RLHF / evals, model registry that **publishes into** the inference gateway — not in the request path.
+- **Cross-cutting:** input/output guardrails (validator + hooks), OpenTelemetry-style traces (to add), tenant isolation on every Qdrant filter.
+
+---
+
+## 2. System diagrams (GitHub-safe Mermaid)
+
+GitHub’s Mermaid parser rejects unquoted `*`, `+`, and some `/` in node text. Every label below is quoted.
+
+### 2.1 Three planes (product, inference, training)
 
 ```mermaid
-flowchart LR
-  subgraph Devices["Clients"]
-    iOS["iOS App (Expo)"]
-    Android["Android App (Expo)"]
-    WebUser["Browser (Vite React)"]
+flowchart TB
+  subgraph Product["Product plane"]
+    C["Clients: Web, App, API"]
+    E["Edge: CDN, WAF"]
+    G["API gateway: JWT, rate limit, route"]
+    IG["Input guards: PII, injection hooks"]
+    AR["Agent runtime: Hermes, Swarm, tools"]
+    MM["MemoryManager"]
   end
 
-  subgraph Stores["Publish"]
-    AppStore["App Store / Play"]
-    CDN["Vercel / Cloudflare Pages"]
-  end
-
-  subgraph API["Backend"]
-    Gateway["FastAPI + JWT + SSE"]
-    AgentCore["Agent Core"]
+  subgraph Inference["Inference plane"]
+    MR["Model router"]
+    SV["Serving: MLX, vLLM, or cloud APIs"]
+    OG["Output guards: validator, web check"]
   end
 
   subgraph Data["Online data"]
-    PG[("PostgreSQL users/sessions/docs")]
-    Redis[("Redis ST memory")]
-    Qdrant[("Qdrant LT + RAG vectors")]
+    PG[("PostgreSQL")]
+    Redis[("Redis ST")]
+    Qd[("Qdrant LT and RAG")]
   end
 
-  subgraph IdP["Identity"]
-    Email["Email + password"]
-    Google["Google OAuth"]
-    Apple["Apple Sign In"]
+  subgraph Train["Training plane offline"]
+    DL[("Object store / data lake")]
+    PRE["Pretrain / continue-pretrain"]
+    POST["SFT, RLHF, evals"]
+    REG["Model registry"]
   end
 
-  subgraph Models["Model router"]
-    Cloud["Claude / OpenAI / Gemini / …"]
-    MLX["MLX local"]
-  end
-
-  iOS --> AppStore
-  Android --> AppStore
-  WebUser --> CDN
-  AppStore --> Gateway
-  CDN --> Gateway
-  Email --> Gateway
-  Google --> Gateway
-  Apple --> Gateway
-  Gateway --> AgentCore
-  AgentCore --> Models
-  AgentCore --> PG
-  AgentCore --> Redis
-  AgentCore --> Qdrant
+  C --> E --> G --> IG --> AR
+  AR --> MM
+  MM --> PG
+  MM --> Redis
+  MM --> Qd
+  AR --> MR --> SV --> OG
+  OG --> C
+  REG -.-> SV
+  G -.-> DL
+  POST --> EV["Evals and red team"]
+  EV --> REG
+  DL --> PRE --> POST
 ```
 
 ### 2.2 High-level components
 
 ```mermaid
 flowchart TB
-    subgraph Client["Web :3000 · Expo mobile"]
-        UI[Chat UI]
-        AuthUI[Email / Google / Apple]
-        ModelPicker[Model Picker]
-        FeatureBar[Swarm / Upload / Stream]
-    end
+  subgraph Client["Web and Expo"]
+    UI["Chat UI"]
+    AuthUI["Email, Google, Apple"]
+    ModelPicker["Model picker"]
+    FeatureBar["Swarm, upload, stream"]
+  end
 
-    subgraph API["Backend API (FastAPI :8080)"]
-        Routes[/api/v1/*]
-        Auth[JWT + OAuth]
-        Brain[Core + Hermes]
-        Swarm[Swarm Orchestrator]
-        Validator[Answer Validator]
-        Runtime[Hooks / Plugins / Sandbox]
-        MCP[MCP Loader]
-    end
+  subgraph API["FastAPI gateway"]
+    Routes["API v1 routes"]
+    Auth["JWT and OAuth"]
+    Brain["Core and Hermes"]
+    Swarm["Swarm orchestrator"]
+    Validator["Answer validator"]
+    Runtime["Hooks, plugins, sandbox"]
+    MCP["MCP loader"]
+  end
 
-    subgraph Memory["Memory Layer"]
-        ST[(Redis — ST Memory)]
-        PG[(PostgreSQL — Users/Messages/Docs)]
-        Qdrant[(Qdrant — Vectors)]
-        RAG[RAG Store]
-        MM[Memory Manager]
-    end
+  subgraph Memory["Memory layer"]
+    MM["MemoryManager"]
+    ST[("Redis short-term")]
+    PG[("PostgreSQL")]
+    Qdrant[("Qdrant vectors")]
+    RAG["RAG store"]
+  end
 
-    subgraph LLM["Inference"]
-        Registry[Model Registry]
-        Router[Model Router]
-        MLX[MLX-LM Server :8000]
-        Cloud[Cloud APIs]
-    end
+  subgraph LLM["Inference"]
+    Registry["Model catalog"]
+    Router["Model router"]
+    MLX["MLX-LM or vLLM"]
+    Cloud["Cloud APIs"]
+  end
 
-    AuthUI --> Auth
-    UI --> Routes
-    Routes --> Auth
-    Routes --> Brain
-    Routes --> Swarm
-    Brain --> Runtime
-    Swarm --> Runtime
-    Brain --> MM
-    Swarm --> MM
-    MM --> ST
-    MM --> PG
-    MM --> RAG
-    RAG --> Qdrant
-    MM --> Qdrant
-    Brain --> Registry
-    Swarm --> Registry
-    Registry --> Router
-    Router --> MLX
-    Router --> Cloud
-    Brain --> Validator
-    Swarm --> Validator
-    Validator --> RAG
-    Brain --> MCP
+  AuthUI --> Auth
+  UI --> Routes
+  Routes --> Auth
+  Routes --> Brain
+  Routes --> Swarm
+  Brain --> Runtime
+  Swarm --> Runtime
+  Brain --> MM
+  Swarm --> MM
+  MM --> ST
+  MM --> PG
+  MM --> RAG
+  RAG --> Qdrant
+  MM --> Qdrant
+  Brain --> Registry
+  Swarm --> Registry
+  Registry --> Router
+  Router --> MLX
+  Router --> Cloud
+  Brain --> Validator
+  Swarm --> Validator
+  Validator --> RAG
+  Brain --> MCP
 ```
 
-### 2.3 Agent Core — Hermes · Swarm · Hooks · Plugins · Sandbox
+### 2.3 Agent core — Hermes, Swarm, hooks, plugins, sandbox
 
 ```mermaid
 flowchart TB
-  Gateway["Gateway / SSE"] --> Orchestrator["Core Controller or Swarm"]
-  Orchestrator --> Start["Hook: AgentStart"]
-  Start --> Sandbox["Create run sandbox workdir"]
+  Gateway["Gateway SSE"] --> Orchestrator["Core or Swarm"]
+  Orchestrator --> Start["Hook AgentStart"]
+  Start --> Sandbox["Create run workdir"]
   Sandbox --> Router["Model router"]
-  Router -->|"mlx"| MLX["Local MLX + extra_body penalties"]
-  Router -->|"cloud"| Cloud["OpenAI-compat APIs"]
+  Router -->|"mlx"| MLX["Local MLX extra_body"]
+  Router -->|"cloud"| Cloud["OpenAI-compatible APIs"]
   Router --> Loop{"Mode"}
-  Loop -->|"single"| Hermes["Hermes Thought/Action loop"]
-  Loop -->|"use_swarm"| Swarm["Planner → sub-agents → synthesizer"]
-  PluginReg["plugins/*/plugin.json"] --> Hermes
+  Loop -->|"single"| Hermes["Hermes Thought Action loop"]
+  Loop -->|"swarm"| Swarm["Planner then sub-agents"]
+  PluginReg["Plugin packs SKILL.md"] --> Hermes
   PluginReg --> Swarm
-  Hermes --> Pre["Hook: PreToolUse"]
+  Hermes --> Pre["Hook PreToolUse"]
   Swarm --> Pre
-  Pre --> Skills["Skill registry + MCP tools"]
-  Skills --> Post["Hook: PostToolUse"]
-  Post --> Verifier["Validator + RAG/web"]
-  Verifier --> MemWrite["MemoryManager.save_turn"]
-  MemWrite --> End["Hook: AgentComplete"]
+  Pre --> Skills["Skills and MCP tools"]
+  Skills --> Post["Hook PostToolUse"]
+  Post --> Verifier["Validator plus RAG"]
+  Verifier --> MemWrite["MemoryManager save_turn"]
+  MemWrite --> End["Hook AgentComplete"]
   End --> Teardown["Delete sandbox workdir"]
 ```
 
-### 2.4 Sandbox lifecycle (always ends when the agent finishes)
+### 2.4 Sandbox lifecycle
 
 ```mermaid
 sequenceDiagram
-    participant API as FastAPI
-    participant SB as agent_run_sandbox
-    participant H as Hooks
-    participant AG as Hermes / Swarm
-    participant FS as Temp workdir
+  participant API as FastAPI
+  participant SB as agent_run_sandbox
+  participant H as Hooks
+  participant AG as Hermes or Swarm
+  participant FS as Temp workdir
 
-    API->>SB: enter (chat | chat-stream | swarm)
-    SB->>FS: mkdtemp
-    SB->>H: AgentStart
-    SB->>AG: run loop
-    Note over AG: tools resolve paths inside workdir
-    AG-->>SB: return / exception / generator end
-    SB->>H: AgentComplete
-    SB->>FS: rmtree if isolated
-    Note over SB: finally always runs
+  API->>SB: enter chat or swarm
+  SB->>FS: mkdtemp
+  SB->>H: AgentStart
+  SB->>AG: run loop
+  Note over AG: tools stay inside workdir
+  AG-->>SB: return or error
+  SB->>H: AgentComplete
+  SB->>FS: rmtree if isolated
 ```
 
-### 2.5 Auth (online accounts)
+### 2.5 Auth
 
 ```mermaid
 flowchart TD
-  U[User] --> W{Channel}
-  W -->|Web| EmailForm[Register / login email]
-  W -->|Web| GStart[GET /auth/oauth/google/start]
-  W -->|Web| AStart[GET /auth/oauth/apple/start]
-  W -->|iOS/Android| GTok[POST /auth/oauth/google id_token]
-  W -->|iOS| ATok[POST /auth/oauth/apple id_token]
-  EmailForm --> JWT[JWT]
-  GStart --> GCB[Google callback]
-  AStart --> ACB[Apple form_post callback]
-  GCB --> Upsert[upsert users row]
+  U["User"] --> W{"Channel"}
+  W -->|"Web"| EmailForm["Register or login"]
+  W -->|"Web"| GStart["Google OAuth start"]
+  W -->|"Web"| AStart["Apple OAuth start"]
+  W -->|"Mobile"| GTok["Google id_token"]
+  W -->|"iOS"| ATok["Apple identity token"]
+  EmailForm --> JWT["JWT"]
+  GStart --> GCB["Google callback"]
+  AStart --> ACB["Apple form_post"]
+  GCB --> Upsert["upsert users"]
   ACB --> Upsert
   GTok --> Upsert
   ATok --> Upsert
   Upsert --> JWT
-  JWT --> API[Protected /api/v1]
+  JWT --> API["Protected API"]
 ```
 
-### 2.6 Chat request flow (single agent + validation)
+### 2.6 Chat plus validation
 
 ```mermaid
 sequenceDiagram
-    participant U as User
-    participant FE as Frontend
-    participant API as FastAPI
-    participant MM as MemoryManager
-    participant BR as CoreController
-    participant LLM as MLX / Cloud
-    participant VAL as Validator
-    participant RAG as RAG Store
-    participant WS as Web Search
+  participant U as User
+  participant FE as Frontend
+  participant API as FastAPI
+  participant MM as MemoryManager
+  participant BR as CoreController
+  participant LLM as MLX or Cloud
+  participant VAL as Validator
 
-    U->>FE: Send message
-    FE->>API: POST /chat/stream SSE
-    API->>MM: build_context ST + LT + RAG
-    MM->>RAG: retrieve
-    MM-->>BR: MemoryContext
-    BR->>LLM: create_chat_completion
-    Note over BR,LLM: extra_body.repetition_penalty for MLX only
-    loop SSE tokens
-        LLM-->>BR: delta chunks
-        BR-->>FE: event token
-    end
-    BR->>BR: collapse_repetition
-    BR->>VAL: validate_answer
-    VAL->>RAG: chunks
-    opt factual query
-        VAL->>WS: web_search
-    end
-    VAL->>LLM: revise JSON
-    VAL-->>BR: ValidationResult
-    BR->>MM: save_turn
-    BR-->>FE: event done
+  U->>FE: Send message
+  FE->>API: POST chat stream
+  API->>MM: build_context
+  MM-->>BR: MemoryContext
+  BR->>LLM: create_chat_completion
+  Note over BR,LLM: extra_body only for MLX penalties
+  loop SSE
+    LLM-->>BR: delta
+    BR-->>FE: token event
+  end
+  BR->>VAL: validate_answer
+  VAL-->>BR: ValidationResult
+  BR->>MM: save_turn
+  BR-->>FE: done event
 ```
 
-### 2.7 Swarm orchestration
+### 2.7 Swarm
 
 ```mermaid
 flowchart LR
-    Q[User Query] --> P[Planner Agent]
-    P --> SA1[Researcher]
-    P --> SA2[Analyst]
-    P --> SA3[Executor]
-    SA1 --> WS[Web Search / Tavily MCP]
-    SA2 --> FS[File Skills]
-    SA3 --> CMD[Shell / Write]
-    SA1 --> SYN[Synthesizer]
-    SA2 --> SYN
-    SA3 --> SYN
-    SYN --> VAL[Validator Agent]
-    VAL --> RAG[RAG Evidence]
-    VAL --> WS2[Web Search]
-    VAL --> OUT[Final Answer]
+  Q["User query"] --> P["Planner"]
+  P --> SA1["Researcher"]
+  P --> SA2["Analyst"]
+  P --> SA3["Executor"]
+  SA1 --> WS["Web search MCP"]
+  SA2 --> FS["File skills"]
+  SA3 --> CMD["Shell write"]
+  SA1 --> SYN["Synthesizer"]
+  SA2 --> SYN
+  SA3 --> SYN
+  SYN --> VAL["Validator"]
+  VAL --> OUT["Final answer"]
 ```
 
-### 2.8 Model routing
+### 2.8 Model routing (inference gateway)
 
 ```mermaid
 flowchart TD
-    IN[model_id from UI/session] --> ALIAS{MODEL_ALIASES?}
-    ALIAS -->|yes| CAT[Catalog ID]
-    ALIAS -->|no| CAT
-    CAT --> SPEC[ModelSpec]
-    SPEC --> BACK{backend?}
-    BACK -->|mlx| MLX[local_mlx_id → MLX server]
-    BACK -->|openai| OAI[api.openai.com]
-    BACK -->|anthropic| ANT[api.anthropic.com]
-    BACK -->|google| GEM[generativelanguage.googleapis.com]
-    BACK -->|other| OTHER[deepseek / moonshot / xai]
+  IN["model id"] --> ALIAS{"Alias map"}
+  ALIAS --> CAT["Catalog id"]
+  CAT --> SPEC["ModelSpec"]
+  SPEC --> BACK{"Backend"}
+  BACK -->|"mlx"| MLX["MLX server"]
+  BACK -->|"openai"| OAI["api.openai.com"]
+  BACK -->|"anthropic"| ANT["Anthropic"]
+  BACK -->|"google"| GEM["Gemini"]
+  BACK -->|"other"| OTHER["DeepSeek Moonshot xAI"]
 ```
+
+Target serving (when leaving a single Mac): cache-aware scheduler → **prefill** nodes for long packed prompts → **decode** nodes for tokens → shared KV pool (Mooncake / vLLM PagedAttention). Local MLX is the current single-node stand-in.
 
 ### 2.9 Memory and RAG
 
+Full write-up: [Memory.md](Memory.md).
+
 ```mermaid
 flowchart LR
-  Query[User message] --> MM[MemoryManager]
-  MM --> ST[Redis last N turns]
-  MM --> LT[Qdrant user_memory]
-  MM --> RAG[Qdrant user_documents]
-  ST --> CTX[Prompt context]
+  Query["User message"] --> MM["MemoryManager"]
+  MM --> ST["Redis last N"]
+  MM --> LT["Qdrant user_memory"]
+  MM --> RAG["Qdrant user_documents"]
+  ST --> CTX["Packed prompt"]
   LT --> CTX
   RAG --> CTX
-  CTX --> Agent[Hermes / Swarm]
-  Agent --> Save[save_turn]
-  Save --> PG[(PostgreSQL messages)]
+  CTX --> Agent["Hermes or Swarm"]
+  Agent --> Save["save_turn"]
+  Save --> PG[("PostgreSQL")]
   Save --> ST
-  Save --> Embed[Embed assistant+user]
-  Embed --> LT
+  Save --> LT
+```
+
+### 2.10 RAG pipeline (product + retrieval)
+
+```mermaid
+flowchart LR
+  DOC["Uploads"] --> CH["Parse and chunk"]
+  CH --> EM["embed_text 384-d"]
+  EM --> VS["Qdrant plus user_id ACL"]
+  Q["Question"] --> HY["Vector search with tenant filter"]
+  VS --> HY
+  HY --> PACK["Character budget"]
+  PACK --> LLM["Generate with citations"]
+  LLM --> CK["Validator vs chunks"]
 ```
 
 ---
 
-## 3. Design mapping (clipboard systems → this repo)
+## 3. Layer mapping (design logic → this repo)
+
+| Plane | Design logic | This repo today | Scale-up |
+|-------|----------------|-----------------|----------|
+| Product | One gateway for identity, tenancy, uploads | FastAPI JWT, OAuth, sessions, RAG upload | Envoy/Kong, Redis rate limit, Stripe/metering |
+| Auth | User + agent identity, short-lived creds | JWT, Google, Apple | OIDC (Keycloak), mTLS for tools, OPA |
+| Memory | ST vs LT vs RAG, pack under window | Redis + PG + Qdrant, `_fit_context` | BM25 hybrid, reranker, session summaries |
+| Inference | Throughput, TTFB, long-context KV | MLX or cloud `create_chat_completion` | vLLM/SGLang, prefill/decode split, FP8 |
+| Tools | Least privilege + sandbox | Hooks, plugins, tempdir teardown | gVisor/Firecracker, approval queues |
+| Guardrails | Input, tool, output | PreToolUse, validator, web check | Llama Guard, Presidio PII |
+| Training | Offline, published models only | Not in request path | Lake + SFT/RLHF + evals → registry |
+| Observe | Replay every request | Logs, memory overview | OpenTelemetry, Langfuse, eval gates |
+
+Clipboard systems → code:
 
 | Pattern | Source | Implementation |
 |---------|--------|----------------|
-| Observe / think / act | Hermes | `brain/hermes.py` + controller loop |
-| Planner + specialist swarm | Kimi | `agents/swarm.py` |
-| Skills + hooks + plugins | Claude | `skills/`, `runtime/hooks.py`, `runtime/plugins.py`, `plugins/` |
-| Risk-isolated execution | Codex / Cursor | `runtime/sandbox.py` torn down in `finally` |
-| IDE-style file tools | Cursor | sandboxed `read_file` / `write_file` / shell whitelist |
+| Observe / think / act | Hermes | `brain/hermes.py` |
+| Planner swarm | Kimi | `agents/swarm.py` |
+| Skills, hooks, plugins | Claude | `runtime/`, `plugins/` |
+| Isolated exec | Codex / Cursor | `runtime/sandbox.py` `finally` |
+| KV-centric serving | Mooncake | Target on inference plane, not MemoryManager |
 
 ---
 
 ## 4. Repetition token fix
 
-Small MLX models can loop identical tokens. Four layers:
-
 | Layer | Location | Mechanism |
 |-------|----------|-----------|
-| 1. Generation params | `sanitize_completion_kwargs()` | MLX: `extra_body.repetition_penalty` (never a `create()` kwarg). OpenAI-compat: `frequency_penalty` / `presence_penalty` |
-| 2. Delta normalization | `repetition.normalize_stream_delta()` | Cumulative vs delta streams |
-| 3. Stream circuit breaker | `should_stop_stream()` | Stops after 8 identical consecutive deltas |
-| 4. Post-processing | `collapse_repetition()` | Strip repeated phrases from final text |
-
-```env
-LLM_REPETITION_PENALTY=1.15
-LLM_REPETITION_CONTEXT_SIZE=40
-LLM_FREQUENCY_PENALTY=0.3
-LLM_PRESENCE_PENALTY=0.2
-LLM_MAX_TOKENS=2048
-```
-
-If you pass `repetition_penalty=` into `AsyncCompletions.create()`, the OpenAI Python SDK raises `unexpected keyword argument`. All completions must go through `create_chat_completion()`.
+| 1 | `sanitize_completion_kwargs` | MLX `extra_body.repetition_penalty` only — never a `create()` kwarg |
+| 2 | `normalize_stream_delta` | Cumulative vs delta streams |
+| 3 | `should_stop_stream` | Stop after 8 identical deltas |
+| 4 | `collapse_repetition` | Post-process final text |
 
 ---
 
 ## 5. Answer validation
 
-`backend/app/agents/validator.py` after draft generation:
-
-1. Cross-check against RAG chunks
-2. Optional web search for time-sensitive claims
-3. LLM JSON `{ valid, issues, revised_answer }`
-4. Keep draft on technical failure
-
-```env
-ANSWER_VALIDATION_ENABLED=true
-VALIDATION_USE_WEB_SEARCH=true
-```
+`backend/app/agents/validator.py`: RAG cross-check, optional web search, JSON revise. Config `ANSWER_VALIDATION_ENABLED`, `VALIDATION_USE_WEB_SEARCH`.
 
 ---
 
 ## 6. Memory architecture
 
-| Layer | Storage | Scope | API |
-|-------|---------|-------|-----|
-| Short-term | Redis | Last N messages per session | `st_memory` |
-| Long-term | PostgreSQL + Qdrant | Persistent messages + semantic recall | `lt_memory` |
-| RAG | PostgreSQL metadata + Qdrant chunks | User uploads | `rag_store` |
+See **[docs/Memory.md](Memory.md)** for retrieval, packing, TTL, and forget APIs.
+
+| Lane | Storage | API |
+|------|---------|-----|
+| ST | Redis | `st_memory` |
+| Canonical + LT | PostgreSQL + Qdrant `user_memory` | `lt_memory` |
+| RAG | PostgreSQL + Qdrant `user_documents` | `rag_store` |
 
 ```python
 ctx = await memory_manager.build_context(user_id, session_id, query)
@@ -358,7 +352,7 @@ await memory_manager.save_turn(db, session_id, user_id, user_msg, assistant_msg)
 
 ## 7. Model catalog
 
-See `backend/app/llm/registry.py`. Catalog ids such as `mlx-llama-3.2-3b` map to local MLX ids or cloud API ids. Legacy Hugging Face ids map via `MODEL_ALIASES`.
+`backend/app/llm/registry.py`. Catalog ids (example `mlx-llama-3.2-3b`) map to local MLX ids or cloud API ids.
 
 ---
 
@@ -366,61 +360,43 @@ See `backend/app/llm/registry.py`. Catalog ids such as `mlx-llama-3.2-3b` map to
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v1/auth/register` | Email/username account |
-| POST | `/api/v1/auth/login` | Username **or** email + password |
+| POST | `/api/v1/auth/register` | Email/username |
+| POST | `/api/v1/auth/login` | Username or email |
 | GET | `/api/v1/auth/providers` | `{ email, google, apple }` |
-| GET | `/api/v1/auth/oauth/google/start` | Browser Google redirect |
-| GET | `/api/v1/auth/oauth/apple/start` | Browser Apple redirect |
-| POST | `/api/v1/auth/oauth/google` | Native Google ID token |
-| POST | `/api/v1/auth/oauth/apple` | Native Apple identity token |
+| GET | `/api/v1/auth/oauth/google/start` | Browser Google |
+| GET | `/api/v1/auth/oauth/apple/start` | Browser Apple |
+| POST | `/api/v1/auth/oauth/google` | Native Google token |
+| POST | `/api/v1/auth/oauth/apple` | Native Apple token |
 | GET | `/api/v1/models` | Catalog |
 | POST | `/api/v1/sessions` | Chat session |
-| POST | `/api/v1/chat` | Sync chat (+ swarm) |
+| DELETE | `/api/v1/sessions/{id}` | Forget ST + LT for session |
+| POST | `/api/v1/chat` | Sync chat |
 | POST | `/api/v1/chat/stream` | SSE |
 | POST | `/api/v1/uploads` | Upload + RAG index |
-| GET | `/api/v1/runtime/plugins` | Loaded plugins |
+| GET | `/api/v1/rag/documents` | List uploads |
+| DELETE | `/api/v1/rag/documents/{id}` | Forget one document |
+| GET | `/api/v1/memory/overview` | Store snapshot |
+| GET | `/api/v1/runtime/plugins` | Plugins |
 | GET | `/health` | Health |
 
-Chat body:
+---
 
-```json
-{
-  "session_id": "uuid",
-  "message": "Your question",
-  "model_name": "mlx-llama-3.2-3b",
-  "use_swarm": false,
-  "attachments": ["uploads/user-id/doc.txt"]
-}
-```
+## 9. Mobile
+
+`mobile/` Expo. `eas build` / `eas submit`. `EXPO_PUBLIC_API_URL` must be public HTTPS. Google/Apple client ids must match backend.
 
 ---
 
-## 9. Mobile publish
-
-`mobile/` is an Expo app sharing the same JWT API.
-
-```bash
-cd mobile
-npx eas build --platform ios --profile production
-npx eas build --platform android --profile production
-npx eas submit --platform ios
-npx eas submit --platform android
-```
-
-Set `EXPO_PUBLIC_API_URL` to the public HTTPS API. Google web client id must match backend `GOOGLE_OAUTH_CLIENT_ID`. Apple Services ID / bundle id must match `APPLE_OAUTH_CLIENT_ID`. Web Apple also needs `APPLE_OAUTH_TEAM_ID`, `APPLE_OAUTH_KEY_ID`, `APPLE_OAUTH_PRIVATE_KEY`.
-
----
-
-## 10. Infrastructure
+## 10. Infrastructure (dev)
 
 | Service | Port | Purpose |
 |---------|------|---------|
-| Frontend | 3000 | Vite React |
+| Frontend | 3000 | Vite |
 | Backend | 8080 | FastAPI |
-| MLX-LM | 8000 | Local inference |
-| PostgreSQL | 5432 | Users, sessions, messages, documents |
-| Redis | 6379 | ST memory + Celery |
-| Qdrant | 6333 | LT + RAG vectors |
+| MLX-LM | 8000 | Local generate |
+| PostgreSQL | 5432 | Canonical data |
+| Redis | 6379 | ST + Celery |
+| Qdrant | 6333 | LT + RAG |
 
 ```bash
 ./scripts/start_llm_mlx.sh
@@ -434,18 +410,19 @@ Set `EXPO_PUBLIC_API_URL` to the public HTTPS API. Google web client id must mat
 ```
 localAIAgent/
 ├── backend/app/
-│   ├── agents/          # swarm, validator
-│   ├── auth/            # jwt, oauth
-│   ├── brain/           # controller, hermes, repetition
-│   ├── llm/             # registry, router
-│   ├── memory/          # manager, rag, short_term, long_term
-│   ├── runtime/         # hooks, plugins, sandbox
+│   ├── agents/
+│   ├── auth/
+│   ├── brain/
+│   ├── llm/
+│   ├── memory/          # see docs/Memory.md
+│   ├── runtime/
 │   ├── skills/
 │   └── api/routes.py
-├── frontend/src/        # React web
-├── mobile/              # Expo iOS/Android
-├── plugins/             # Claude-style plugin packs
+├── frontend/src/
+├── mobile/
+├── plugins/
 ├── docs/ARCHITECTURE.md
+├── docs/Memory.md
 ├── AGENTS.md
 └── SKILLS.md
 ```
@@ -456,19 +433,19 @@ localAIAgent/
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `unexpected keyword argument 'repetition_penalty'` | OpenAI SDK | Use `create_chat_completion`; restart backend |
-| Same token repeating | MLX loop | Penalties in extra_body + stream guard |
-| Chat hangs | MLX down | `./scripts/start_llm_mlx.sh` |
-| No tool calling on MLX | mlx-lm | Hermes protocol or swarm; or cloud + `LLM_ENABLE_TOOLS=true` |
-| RAG empty | No uploads / Qdrant | Attach files; check Qdrant |
-| Google/Apple login missing | Empty env | Set OAuth client ids (and Apple key for web) |
+| GitHub Mermaid lexical error | Unquoted `*` in `/api/v1/*` | Quoted labels only (this file) |
+| `repetition_penalty` TypeError | OpenAI SDK kwargs | `create_chat_completion` |
+| Backend import SyntaxError | `global` after use | `embeddings.py` global at function top |
+| Auth proxy ECONNREFUSED | API not running | Restart `start_dev.sh` |
+| RAG empty | No upload / Qdrant down | Attach file; check overview |
+| Context overflow / ramble | Budget too high | Lower `MEMORY_CONTEXT_CHAR_BUDGET` |
 
 ---
 
-## 13. Security notes
+## 13. Security
 
-- JWT on `/api/v1/*` except auth + health
-- Uploads scoped to `uploads/{user_id}/`
-- Skills run PreToolUse hooks; file tools stay in sandbox
-- Sandbox directory is deleted when the agent run ends
-- Do not commit `.env` secrets
+- JWT on API except auth + health
+- Uploads under `uploads/{user_id}/`
+- Qdrant filters always include `user_id`
+- PreToolUse hooks; sandbox deleted on AgentComplete
+- Do not commit `.env`
